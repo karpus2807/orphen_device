@@ -1,0 +1,21 @@
+[Unit]
+Description=Device Safety Manager backend (admin dashboard + API)
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__DEPLOY_USER__
+Group=__DEPLOY_USER__
+WorkingDirectory=__APP_DIR__
+Environment=PYTHONUNBUFFERED=1
+Environment=DEVICE_SAFETY_BIND_HOST=0.0.0.0
+Environment=DEVICE_SAFETY_PORT=__DEVICE_SAFETY_PORT__
+ExecStart=/usr/bin/python3 __APP_DIR__/backend/server.py
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

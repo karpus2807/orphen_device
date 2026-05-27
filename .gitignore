@@ -1,0 +1,22 @@
+# Android build artifacts
+build/
+apk/
+
+# Backend runtime data
+backend/data/*.db
+backend/data/*.json
+backend/data/audio_recordings/
+
+# Deploy secrets (server only)
+deploy/webhook.env
+deploy/server.env
+
+# Python
+__pycache__/
+*.pyc
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store

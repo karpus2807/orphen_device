@@ -1,0 +1,17 @@
+[Unit]
+Description=GitHub webhook auto-deploy for Device Safety backend
+After=network.target device-safety-backend.service
+
+[Service]
+Type=simple
+User=__DEPLOY_USER__
+Group=__DEPLOY_USER__
+WorkingDirectory=__APP_DIR__
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=__APP_DIR__/deploy/webhook.env
+ExecStart=/usr/bin/python3 __APP_DIR__/deploy/webhook-server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
