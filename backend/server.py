@@ -29,6 +29,9 @@ import geofence_page as gf_page
 import geofence_zones as gf
 import remote_ops
 import security_control
+
+WIFI_SAVED_PROFILES_KEY = "wifi_saved_profiles_json"
+WIFI_SCAN_AT_KEY = "wifi_scan_at"
 DATA_FILE = ROOT / "data" / "devices.json"
 CONFIG_FILE = ROOT / "data" / "server_config.json"
 HEARTBEAT_FILE = ROOT / "data" / "heartbeats.json"
@@ -979,6 +982,19 @@ def update_device_telemetry_from_body(device_id, body):
                 location_values["accuracy"],
                 location_values["timestamp"],
             )
+        telemetry_setting_updates = {}
+        nearby_wifi = body.get("nearbyWifi")
+        if isinstance(nearby_wifi, list):
+            telemetry_setting_updates[gf.NEARBY_WIFI_KEY] = json.dumps(nearby_wifi)
+        saved_profiles = body.get("savedWifiProfiles")
+        if isinstance(saved_profiles, list):
+            telemetry_setting_updates[WIFI_SAVED_PROFILES_KEY] = json.dumps(saved_profiles)
+        wifi_scan_at = body.get("wifiScanAt")
+        if isinstance(wifi_scan_at, (int, float)) or (isinstance(wifi_scan_at, str) and str(wifi_scan_at).isdigit()):
+            telemetry_setting_updates[WIFI_SCAN_AT_KEY] = str(int(float(wifi_scan_at)))
+        if telemetry_setting_updates:
+            write_device_key_values(device_id, telemetry_setting_updates)
+
         geofence_config = read_device_geofence_config(device_id)
         if geofence_config.get("wifiNetworks") or geofence_config.get("locationZones"):
             saved_geofence = read_device_key_values(device_id, {})
@@ -1881,6 +1897,7 @@ def perform_bulk_device_action(device_ids, action, payload="", group_name=""):
                 "push_wifi_profile",
                 "enable_wifi",
                 "enable_location",
+                "scan_wifi",
                 "start_audio_stream",
                 "stop_audio_stream",
                 "start_remote_session",
@@ -2420,6 +2437,44 @@ def read_wifi_suggestions_for_device(device_id):
     return gf.merge_wifi_suggestions(device, config, saved.get(gf.NEARBY_WIFI_KEY))
 
 
+def parse_json_array(raw_value):
+    try:
+        parsed = json.loads(str(raw_value or "[]"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(item).strip() for item in parsed if str(item).strip()]
+
+
+def build_wifi_dashboard_snapshot(device_id):
+    saved = read_device_key_values(
+        device_id,
+        {
+            gf.NEARBY_WIFI_KEY: "[]",
+            WIFI_SAVED_PROFILES_KEY: "[]",
+            WIFI_SCAN_AT_KEY: "",
+        },
+    )
+    nearby = parse_json_array(saved.get(gf.NEARBY_WIFI_KEY))
+    profiles = parse_json_array(saved.get(WIFI_SAVED_PROFILES_KEY))
+    scan_at_raw = str(saved.get(WIFI_SCAN_AT_KEY) or "").strip()
+    scan_at = int(scan_at_raw) if scan_at_raw.isdigit() else None
+    return {
+        "nearbyCount": len(nearby),
+        "savedCount": len(profiles),
+        "nearby": nearby[:8],
+        "savedProfiles": profiles[:8],
+        "scanAt": scan_at,
+    }
+
+
+def attach_wifi_dashboard_snapshot(devices):
+    for device in devices:
+        device["wifiSnapshot"] = build_wifi_dashboard_snapshot(device.get("deviceId"))
+    return devices
+
+
 def read_device_wifi_profile_config(device_id):
     saved = read_device_key_values(device_id, default_wifi_profile_config())
     if str(saved.get("ssid") or "").strip():
@@ -2708,6 +2763,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
         if path == "/devices":
             devices = [decorate_device(device) for device in read_devices()]
+            attach_wifi_dashboard_snapshot(devices)
             self.send_json({"devices": devices})
             return
         if path == "/devices/timeline.json":
@@ -3613,6 +3669,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             "push_wifi_profile",
             "enable_wifi",
             "enable_location",
+            "scan_wifi",
             "start_audio_stream",
             "stop_audio_stream",
             "start_remote_session",
@@ -4951,6 +5008,7 @@ def render_admin_nav():
 
 
 def render_dashboard(devices, selected_filter="online", selected_group=""):
+    attach_wifi_dashboard_snapshot(devices)
     decorated_devices = [decorate_device(device) for device in devices]
     visible_devices = filter_devices(devices, selected_filter, selected_group)
     groups = list_device_groups()
@@ -4992,6 +5050,7 @@ def render_dashboard(devices, selected_filter="online", selected_group=""):
             <option value="push_wifi_profile">Push Wi-Fi Profile</option>
             <option value="enable_wifi">Enable Wi-Fi</option>
             <option value="enable_location">Enable Location (GPS)</option>
+            <option value="scan_wifi">Scan Wi-Fi & Refresh</option>
             <option value="show_alert">Show Alert</option>
             <option value="request_device_admin">Request Device Admin</option>
             <option value="reregister">Re-register & Push Token</option>
@@ -5018,6 +5077,7 @@ def render_dashboard(devices, selected_filter="online", selected_group=""):
               <th>API</th>
               <th>Created</th>
               <th>Last Seen</th>
+              <th>Wi-Fi</th>
               <th>Action</th>
             </tr>
           </thead>
@@ -5031,7 +5091,7 @@ def render_dashboard(devices, selected_filter="online", selected_group=""):
     scripts = f"""<script>
     const currentFilter = "{selected_filter}";
     const currentGroup = "{escape(selected_group)}";
-    const emptyRow = '<tr><td colspan="11" class="empty">No devices match this filter.</td></tr>';
+    const emptyRow = '<tr><td colspan="12" class="empty">No devices match this filter.</td></tr>';
     const DEVICE_MENU_ITEMS = {render_device_menu_js_items()};
 
     function escapeHtml(value) {{
@@ -5048,6 +5108,19 @@ def render_dashboard(devices, selected_filter="online", selected_group=""):
         return '';
       }}
       return new Date(value * 1000).toLocaleString();
+    }}
+
+    function summarizeWifi(device) {{
+      const snap = device.wifiSnapshot || {{}};
+      const scanAt = snap.scanAt ? ` · scan ${{
+        new Date(Number(snap.scanAt) * 1000).toLocaleTimeString()
+      }}` : '';
+      const nearbyCount = Number(snap.nearbyCount || 0);
+      const savedCount = Number(snap.savedCount || 0);
+      const current = device.lastWifiSsid ? `Now: ${{escapeHtml(device.lastWifiSsid)}}<br>` : '';
+      const nearby = nearbyCount > 0 ? `Near: ${{nearbyCount}}` : 'Near: 0';
+      const saved = savedCount > 0 ? `Saved: ${{savedCount}}` : 'Saved: 0';
+      return `${{current}}<span class="small text-secondary">${{nearby}} · ${{saved}}${{scanAt}}</span>`;
     }}
 
     function deviceVisible(device) {{
@@ -5133,6 +5206,7 @@ def render_dashboard(devices, selected_filter="online", selected_group=""):
         <td>${{escapeHtml(device.apiLevel)}}</td>
         <td>${{formatTimestamp(device.createdAt)}}</td>
         <td>${{formatTimestamp(device.lastSeenAt)}}</td>
+        <td>${{summarizeWifi(device)}}</td>
         <td>${{renderAction(device)}}</td>
       </tr>`;
     }}
@@ -5599,6 +5673,12 @@ def render_device_wifi_profile_page(device, config, message="", alert_class="ale
         </form>
         <form method="post" action="/devices/send-command" class="d-inline">
           <input type="hidden" name="deviceId" value="{device_id}">
+          <input type="hidden" name="commandType" value="scan_wifi">
+          <input type="hidden" name="returnTo" value="/devices/wifi-profile?deviceId={device_id}">
+          <button class="btn btn-outline-secondary" type="submit">Scan Wi-Fi & Refresh</button>
+        </form>
+        <form method="post" action="/devices/send-command" class="d-inline">
+          <input type="hidden" name="deviceId" value="{device_id}">
           <input type="hidden" name="commandType" value="push_wifi_profile">
           <input type="hidden" name="returnTo" value="/devices/wifi-profile?deviceId={device_id}">
           <button class="btn btn-outline-success" type="submit">Push Wi-Fi Profile Now</button>
@@ -5978,6 +6058,7 @@ def render_device_detail(device, events, commands, message=""):
         <option value="push_wifi_profile">Push Wi-Fi Profile</option>
         <option value="enable_wifi">Enable Wi-Fi</option>
         <option value="enable_location">Enable Location (GPS)</option>
+        <option value="scan_wifi">Scan Wi-Fi & Refresh</option>
         <option value="show_alert">Show Alert Message</option>
         <option value="request_device_admin">Request Device Admin</option>
         <option value="start_audio_stream">Start Live Audio Stream</option>
@@ -6583,8 +6664,23 @@ def render_device_row(device):
   <td>{escape(device.get("apiLevel"))}</td>
   <td>{format_timestamp(device.get("createdAt"))}</td>
   <td>{format_timestamp(device.get("lastSeenAt"))}</td>
+  <td>{render_wifi_dashboard_cell(device)}</td>
   <td>{action}</td>
 </tr>"""
+
+
+def render_wifi_dashboard_cell(device):
+    snapshot = device.get("wifiSnapshot") or {}
+    current = escape(device.get("lastWifiSsid") or "-")
+    nearby_count = int(snapshot.get("nearbyCount") or 0)
+    saved_count = int(snapshot.get("savedCount") or 0)
+    scan_at = format_optional_timestamp(snapshot.get("scanAt"), "")
+    return (
+        f"<div><div><strong>{current}</strong></div>"
+        f"<div class=\"small text-secondary\">Near: {nearby_count} · Saved: {saved_count}"
+        + (f" · {escape(scan_at)}" if scan_at else "")
+        + "</div></div>"
+    )
 
 
 def format_device_location(device):

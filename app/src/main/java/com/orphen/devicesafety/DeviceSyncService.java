@@ -303,6 +303,11 @@ public class DeviceSyncService extends Service {
                 BackendClient.completeCommand(this, commandId, "completed", result);
                 return;
             }
+            if ("scan_wifi".equals(type)) {
+                BackendClient.sendTelemetry(this, isDeviceAdminActive());
+                BackendClient.completeCommand(this, commandId, "completed", "Wi-Fi scan and telemetry refresh completed");
+                return;
+            }
             if ("show_alert".equals(type)) {
                 Intent alertIntent = new Intent(this, AlertActivity.class);
                 alertIntent.putExtra("message", payload);
