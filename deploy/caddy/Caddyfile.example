@@ -1,0 +1,15 @@
+# Copy to /etc/caddy/Caddyfile (or include from there)
+# Replace example.com with your real subdomain, e.g. devices.ipserver.in
+
+# Admin UI + API + APK downloads
+devices.example.com {
+    encode gzip
+    reverse_proxy 127.0.0.1:9030
+}
+
+# GitHub auto-deploy webhook (optional separate subdomain)
+hooks.example.com {
+    reverse_proxy 127.0.0.1:9001
+}
+
+# After enabling: close public port 9030/9001 in firewall; only 80/443 stay open.

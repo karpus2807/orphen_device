@@ -1,0 +1,46 @@
+# Install: sudo apt install nginx certbot python3-certbot-nginx
+# Copy to: /etc/nginx/sites-available/device-safety
+# Enable: sudo ln -s /etc/nginx/sites-available/device-safety /etc/nginx/sites-enabled/
+# SSL: sudo certbot --nginx -d devices.example.com
+# Test: sudo nginx -t && sudo systemctl reload nginx
+
+# HTTP → HTTPS redirect (certbot may add this automatically)
+server {
+    listen 80;
+    listen [::]:80;
+    server_name devices.example.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name devices.example.com;
+
+    # certbot fills these paths:
+    # ssl_certificate /etc/letsencrypt/live/devices.example.com/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/devices.example.com/privkey.pem;
+
+    client_max_body_size 120M;
+
+    location / {
+        proxy_pass http://127.0.0.1:9030;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+    }
+}
+
+# Webhook (optional second subdomain)
+# server {
+#     listen 443 ssl http2;
+#     server_name hooks.example.com;
+#     location / {
+#         proxy_pass http://127.0.0.1:9001;
+#         proxy_set_header Host $host;
+#         proxy_set_header X-Forwarded-Proto $scheme;
+#     }
+# }
