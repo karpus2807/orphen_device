@@ -24,7 +24,7 @@ import java.net.URL;
 public class UpdateSyncService extends Service {
     public static final String ACTION_SYNC_NOW = "com.orphen.updatemanager.SYNC_NOW";
     private static final String TAG = "UpdateSyncService";
-    private static final String TARGET_DSM = "com.example.devicesafety";
+    private static final String TARGET_DSM = "com.orphen.devicesafety";
     private static final long POLL_MS = 90_000L;
     private static final long POLL_MS_MISSING = 30_000L;
     private final Handler handler = new Handler(Looper.getMainLooper());

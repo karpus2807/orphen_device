@@ -77,7 +77,7 @@ public class MainActivity extends Activity {
         String savedHost = PrefsHelper.prefs(this).getString("serverHost", "");
         if (savedHost.length() > 0) {
             UpdateSyncService.start(this);
-            if (!ApkInstaller.isPackageInstalled(this, "com.example.devicesafety")) {
+            if (!ApkInstaller.isPackageInstalled(this, "com.orphen.devicesafety")) {
                 Toast.makeText(
                         this,
                         "Device Safety not installed — downloading current version from server…",

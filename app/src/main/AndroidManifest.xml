@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
-    package="com.example.devicesafety">
+    package="com.orphen.devicesafety">
     <uses-sdk
         android:minSdkVersion="24"
         android:targetSdkVersion="36" />
@@ -151,7 +151,7 @@
             android:name=".SyncAlarmReceiver"
             android:exported="false">
             <intent-filter>
-                <action android:name="com.example.devicesafety.SYNC_ALARM" />
+                <action android:name="com.orphen.devicesafety.SYNC_ALARM" />
             </intent-filter>
         </receiver>
 

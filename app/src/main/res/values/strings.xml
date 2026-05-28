@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Device Safety Manager</string>
+    <string name="app_name">Orphen Device Safety</string>
     <string name="app_name_hidden">System</string>
     <string name="device_admin_explanation">Enable device admin so this transparent management app cannot be uninstalled without admin permission.</string>
 </resources>

@@ -9,18 +9,28 @@ PLATFORM="${ANDROID_PLATFORM:-$HOME/Android/Sdk/platforms/android-34/android.jar
 OUT="${ROOT}/apk/orphen-update-manager.apk"
 UNSIGNED="${ROOT}/build/update-manager-unsigned.apk"
 
+if [[ -z "${ANDROID_SDK_ROOT:-}" && -f "${ROOT}/deploy/server.env" ]]; then
+  ANDROID_SDK_ROOT="$(grep -E '^ANDROID_SDK_ROOT=' "${ROOT}/deploy/server.env" | cut -d= -f2- | tr -d ' \r' || true)"
+  export ANDROID_SDK_ROOT
+fi
+if [[ -z "${ANDROID_SDK_ROOT:-}" && -d /opt/android-sdk ]]; then
+  export ANDROID_SDK_ROOT=/opt/android-sdk
+fi
 if [[ -n "${ANDROID_SDK_ROOT:-}" ]]; then
   BT_CAND="${ANDROID_SDK_ROOT}/build-tools"
   if [[ -d "${BT_CAND}" ]]; then
     BT="$(find "${BT_CAND}" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -1)"
   fi
-  if [[ -f "${ANDROID_SDK_ROOT}/platforms/android-36/android.jar" ]]; then
-    PLATFORM="${ANDROID_SDK_ROOT}/platforms/android-36/android.jar"
-  fi
+  for api in 36 34; do
+    if [[ -f "${ANDROID_SDK_ROOT}/platforms/android-${api}/android.jar" ]]; then
+      PLATFORM="${ANDROID_SDK_ROOT}/platforms/android-${api}/android.jar"
+      break
+    fi
+  done
 fi
 
 if [[ ! -x "${BT}/aapt2" ]]; then
-  echo "Missing aapt2 at ${BT}/aapt2 — set ANDROID_SDK_ROOT or install SDK." >&2
+  echo "Missing aapt2 at ${BT}/aapt2 — set ANDROID_SDK_ROOT=/opt/android-sdk or install SDK." >&2
   exit 1
 fi
 

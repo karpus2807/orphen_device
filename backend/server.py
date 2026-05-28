@@ -3961,8 +3961,8 @@ class ApiHandler(BaseHTTPRequestHandler):
     def app_release_build_push(self):
         body = self.read_form_body()
         release_notes = str(body.get("releaseNotes", [""])[0]).strip()
-        package_name = str(body.get("packageName", ["com.example.devicesafety"])[0]).strip()
-        app_label = str(body.get("appLabel", ["Device Safety Manager"])[0]).strip()
+        package_name = str(body.get("packageName", ["com.orphen.devicesafety"])[0]).strip()
+        app_label = str(body.get("appLabel", ["Orphen Device Safety"])[0]).strip()
         auto_bump = str(body.get("autoBump", ["on"])[0]).strip().lower() in ("on", "1", "true", "yes")
         version_name = str(body.get("versionName", [""])[0]).strip()
         version_code = str(body.get("versionCode", [""])[0]).strip()
@@ -3981,8 +3981,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def app_release_register(self):
         body = self.read_form_body()
-        package_name = str(body.get("packageName", ["com.example.devicesafety"])[0]).strip()
-        app_label = str(body.get("appLabel", ["Device Safety Manager"])[0]).strip()
+        package_name = str(body.get("packageName", ["com.orphen.devicesafety"])[0]).strip()
+        app_label = str(body.get("appLabel", ["Orphen Device Safety"])[0]).strip()
         version_name = str(body.get("versionName", [""])[0]).strip()
         version_code = str(body.get("versionCode", [""])[0]).strip()
         release_notes = str(body.get("releaseNotes", [""])[0]).strip()
@@ -4017,7 +4017,7 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def app_release_push(self):
         body = self.read_form_body()
-        package_name = str(body.get("packageName", ["com.example.devicesafety"])[0]).strip()
+        package_name = str(body.get("packageName", ["com.orphen.devicesafety"])[0]).strip()
         server = read_server_config()
         with db_connect() as connection:
             row = connection.execute(
@@ -5259,8 +5259,8 @@ def render_app_release_center(message="", building=False, detail=""):
         f'<p class="mb-2"><strong>Status:</strong> <span id="build-status-line">{status_line}</span></p>'
         '<form method="post" action="/app-release-center/build-push">'
         '<input type="hidden" name="autoBump" value="on">'
-        '<input type="hidden" name="packageName" value="com.example.devicesafety">'
-        '<input type="hidden" name="appLabel" value="Device Safety Manager">'
+        '<input type="hidden" name="packageName" value="com.orphen.devicesafety">'
+        '<input type="hidden" name="appLabel" value="Orphen Device Safety">'
         '<div class="row g-2 mb-2">'
         '<div class="col-md-3"><label class="form-label">Next version name</label>'
         f'<input class="form-control" name="versionName" value="{next_name}" readonly></div>'
@@ -5290,9 +5290,9 @@ def render_app_release_center(message="", building=False, detail=""):
         '<form method="post" action="/app-release-center/register" class="mb-3">'
         '<div class="row g-2">'
         '<div class="col-md-3"><label class="form-label">Package</label>'
-        '<input class="form-control" name="packageName" value="com.example.devicesafety"></div>'
+        '<input class="form-control" name="packageName" value="com.orphen.devicesafety"></div>'
         '<div class="col-md-3"><label class="form-label">App label</label>'
-        '<input class="form-control" name="appLabel" value="Device Safety Manager"></div>'
+        '<input class="form-control" name="appLabel" value="Orphen Device Safety"></div>'
         '<div class="col-md-2"><label class="form-label">Version name</label>'
         f'<input class="form-control" name="versionName" value="{escape(version.get("versionName", ""))}"></div>'
         '<div class="col-md-2"><label class="form-label">Version code</label>'
@@ -5300,7 +5300,7 @@ def render_app_release_center(message="", building=False, detail=""):
         '<div class="col-md-2 d-flex align-items-end"><button class="btn btn-outline-secondary w-100" type="submit">Register</button></div>'
         "</div></form>"
         '<form method="post" action="/app-release-center/push">'
-        '<input type="hidden" name="packageName" value="com.example.devicesafety">'
+        '<input type="hidden" name="packageName" value="com.orphen.devicesafety">'
         '<button class="btn btn-outline-success" type="submit">Push last registered release only</button>'
         "</form></section>"
         '<section class="admin-card p-4">'

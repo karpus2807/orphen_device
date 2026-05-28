@@ -60,8 +60,12 @@ def ensure_update_manager_targets(connection):
         ")"
     )
     connection.execute(
+        "UPDATE update_manager_targets SET package_name = 'com.orphen.devicesafety', "
+        "app_label = 'Orphen Device Safety' WHERE package_name = 'com.example.devicesafety'"
+    )
+    connection.execute(
         "INSERT OR IGNORE INTO update_manager_targets (package_name, app_label, enabled) "
-        "VALUES ('com.example.devicesafety', 'Device Safety Manager', 1)"
+        "VALUES ('com.orphen.devicesafety', 'Orphen Device Safety', 1)"
     )
     connection.execute(
         "INSERT OR IGNORE INTO update_manager_targets (package_name, app_label, enabled) "
@@ -257,8 +261,8 @@ def _run_build_thread(
     auto_register=True,
     auto_push=True,
     release_notes="",
-    package_name="com.example.devicesafety",
-    app_label="Device Safety Manager",
+    package_name="com.orphen.devicesafety",
+    app_label="Orphen Device Safety",
     create_command_fn=None,
     read_devices_fn=None,
 ):
@@ -377,8 +381,8 @@ def start_build_and_push(
     version_code="",
     version_name="",
     release_notes="",
-    package_name="com.example.devicesafety",
-    app_label="Device Safety Manager",
+    package_name="com.orphen.devicesafety",
+    app_label="Orphen Device Safety",
 ):
     if auto_bump or not version_code or not version_name:
         version_code, version_name = bump_version()
@@ -476,7 +480,7 @@ def get_active_release_for_package(connection, package_name, server_host, server
 def _default_apk_filename_for_package(package_name):
     if not APK_DIR.is_dir():
         return "device-safety-manager-debug.apk"
-    if package_name == "com.example.devicesafety":
+    if package_name == "com.orphen.devicesafety":
         preferred = APK_DIR / "device-safety-manager-debug.apk"
         if preferred.is_file():
             return preferred.name
@@ -497,7 +501,7 @@ def get_catalog_release_for_package(connection, package_name, server_host, serve
         payload["installIfMissing"] = True
         return payload
 
-    if package_name != "com.example.devicesafety":
+    if package_name != "com.orphen.devicesafety":
         return None
 
     props = read_version_properties()

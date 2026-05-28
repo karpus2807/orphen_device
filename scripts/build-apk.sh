@@ -78,12 +78,12 @@ javac -source 8 -target 8 \
   -bootclasspath "${PLATFORM}" \
   -classpath "${ZXING}" \
   -d build/classes \
-  build/gen/com/example/devicesafety/R.java \
-  app/src/main/java/com/example/devicesafety/*.java
+  build/gen/com/orphen/devicesafety/R.java \
+  app/src/main/java/com/orphen/devicesafety/*.java
 
 echo "Building DEX..."
 "${BT}/d8" --lib "${PLATFORM}" --output build/dex \
-  build/classes/com/example/devicesafety/*.class \
+  build/classes/com/orphen/devicesafety/*.class \
   "${ZXING}"
 
 echo "Packaging APK..."
