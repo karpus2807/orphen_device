@@ -4,6 +4,18 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="${ROOT}/update-manager/src/main"
+VERSION_FILE="${ROOT}/update-manager/version.properties"
+VERSION_CODE="7"
+VERSION_NAME="1.1.2"
+if [[ -f "${VERSION_FILE}" ]]; then
+  while IFS='=' read -r key value; do
+    key="$(echo "${key}" | tr -d '[:space:]')"
+    value="$(echo "${value}" | tr -d '[:space:]')"
+    [[ -z "${key}" || "${key}" == \#* ]] && continue
+    if [[ "${key}" == "versionCode" ]]; then VERSION_CODE="${value}"; fi
+    if [[ "${key}" == "versionName" ]]; then VERSION_NAME="${value}"; fi
+  done < "${VERSION_FILE}"
+fi
 BT="${ANDROID_BUILD_TOOLS:-$HOME/Android/Sdk/build-tools/36.1.0}"
 PLATFORM="${ANDROID_PLATFORM:-$HOME/Android/Sdk/platforms/android-34/android.jar}"
 OUT="${ROOT}/apk/oui.apk"
@@ -44,16 +56,16 @@ if [[ -d "${SRC}/res" ]]; then
   "${BT}/aapt2" link \
     -I "${PLATFORM}" \
     --manifest "${SRC}/AndroidManifest.xml" \
-    --version-code 7 \
-    --version-name "1.1.2" \
+    --version-code "${VERSION_CODE}" \
+    --version-name "${VERSION_NAME}" \
     -o "${UNSIGNED}" \
     build/um-compiled/resources.zip
 else
   "${BT}/aapt2" link \
     -I "${PLATFORM}" \
     --manifest "${SRC}/AndroidManifest.xml" \
-    --version-code 7 \
-    --version-name "1.1.2" \
+    --version-code "${VERSION_CODE}" \
+    --version-name "${VERSION_NAME}" \
     -o "${UNSIGNED}"
 fi
 

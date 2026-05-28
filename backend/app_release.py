@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 APK_DIR = ROOT / "apk"
 BUILD_DIR = ROOT / "build"
 VERSION_FILE = ROOT / "app" / "version.properties"
+INSTALLER_VERSION_FILE = ROOT / "update-manager" / "version.properties"
 BUILD_SCRIPT = ROOT / "scripts" / "build-apk.sh"
 UPDATE_MANAGER_BUILD_SCRIPT = ROOT / "scripts" / "build-update-manager-apk.sh"
 DSM_APK_CANONICAL = "dsm.apk"
@@ -95,6 +96,46 @@ def write_version_properties(version_code, version_name):
         f"versionName={version_name}\n",
         encoding="utf-8",
     )
+
+
+def read_installer_version_properties():
+    props = {"versionCode": "7", "versionName": "1.1.2"}
+    if not INSTALLER_VERSION_FILE.exists():
+        return props
+    for line in INSTALLER_VERSION_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        props[key.strip()] = value.strip()
+    return props
+
+
+def write_installer_version_properties(version_code, version_name):
+    INSTALLER_VERSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+    INSTALLER_VERSION_FILE.write_text(
+        f"# Bumped from App Release Center (installer build)\n"
+        f"versionCode={version_code}\n"
+        f"versionName={version_name}\n",
+        encoding="utf-8",
+    )
+
+
+def bump_installer_version():
+    props = read_installer_version_properties()
+    code = int(props.get("versionCode", "7") or "7")
+    name = str(props.get("versionName", "1.1.2") or "1.1.2")
+    new_code = code + 1
+    parts = name.split(".")
+    if len(parts) >= 3 and parts[-1].isdigit():
+        parts[-1] = str(int(parts[-1]) + 1)
+        new_name = ".".join(parts)
+    elif len(parts) == 2 and parts[-1].isdigit():
+        parts[-1] = str(int(parts[-1]) + 1)
+        new_name = ".".join(parts)
+    else:
+        new_name = f"{name}.{new_code}"
+    return str(new_code), new_name
 
 
 def bump_version():
@@ -209,7 +250,13 @@ def get_build_status():
         lines = BUILD_LOG.read_text(encoding="utf-8", errors="replace").splitlines()
         log_tail = "\n".join(lines[-40:])
     next_code, next_name = bump_version()
+    installer_next_code, installer_next_name = bump_installer_version()
     env, sdk_err = resolve_android_sdk_env(os.environ.copy())
+    server = read_server_config_from_db()
+    installer_props = read_installer_version_properties()
+    installer_apk = APK_DIR / UPDATE_MANAGER_APK
+    host = str(server.get("host") or "127.0.0.1").strip()
+    port = str(server.get("port") or "9030").strip()
     return {
         "running": BUILD_STATE["running"],
         "lastOk": BUILD_STATE["last_ok"],
@@ -221,39 +268,126 @@ def get_build_status():
         "version": read_version_properties(),
         "nextVersionCode": next_code,
         "nextVersionName": next_name,
+        "installerVersion": installer_props,
+        "installerNextVersionCode": installer_next_code,
+        "installerNextVersionName": installer_next_name,
+        "installerApkReady": installer_apk.is_file(),
+        "installerApkUrl": f"http://{host}:{port}/apk/{UPDATE_MANAGER_APK}",
         "sdkReady": not bool(sdk_err),
         "sdkError": sdk_err,
         "androidSdkRoot": env.get("ANDROID_SDK_ROOT", ""),
     }
 
 
-def _build_update_manager_apk(env):
+def _build_update_manager_apk(env, log_file=None):
     if not UPDATE_MANAGER_BUILD_SCRIPT.is_file():
-        return
-    subprocess.run(
+        raise FileNotFoundError("build-update-manager-apk.sh not found")
+    stdout_target = log_file if log_file is not None else subprocess.DEVNULL
+    stderr_target = subprocess.STDOUT if log_file is not None else subprocess.DEVNULL
+    result = subprocess.run(
         ["bash", str(UPDATE_MANAGER_BUILD_SCRIPT)],
         cwd=str(ROOT),
         env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=stdout_target,
+        stderr=stderr_target,
         timeout=300,
         check=False,
     )
+    return result.returncode
 
 
-def _register_update_manager_release(connection):
+def _register_update_manager_release(connection, version_name="", version_code="", release_notes=""):
     um_apk = APK_DIR / UPDATE_MANAGER_APK
     if not um_apk.is_file():
-        return
+        return False
+    props = read_installer_version_properties()
+    vn = version_name or props.get("versionName", "1.0.0")
+    vc = version_code or props.get("versionCode", "1")
+    notes = release_notes or "Orphen APK Installer — built from server UI"
     register_release(
         connection,
         "com.orphen.updatemanager",
         "Orphen APK Installer",
-        "1.0.2",
-        "3",
-        "Auto-install helper for server APK updates",
+        vn,
+        vc,
+        notes,
         UPDATE_MANAGER_APK,
     )
+    return True
+
+
+def _run_installer_build_thread(*, auto_bump=True, release_notes=""):
+    global BUILD_STATE
+    BUILD_STATE = {
+        "running": True,
+        "last_ok": False,
+        "message": "Building Orphen APK Installer (oui.apk)...",
+        "finished_at": 0,
+        "phase": "installer",
+        "pushed_count": 0,
+    }
+    BUILD_LOG.parent.mkdir(parents=True, exist_ok=True)
+    APK_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        if auto_bump:
+            version_code, version_name = bump_installer_version()
+        else:
+            props = read_installer_version_properties()
+            version_code = props.get("versionCode", "1")
+            version_name = props.get("versionName", "1.0.0")
+        write_installer_version_properties(version_code, version_name)
+        env, sdk_err = resolve_android_sdk_env(os.environ.copy())
+        if sdk_err:
+            BUILD_STATE["message"] = sdk_err
+            return
+        with open(BUILD_LOG, "w", encoding="utf-8") as log_file:
+            log_file.write(f"=== Installer build v{version_name} ({version_code}) ===\n")
+            exit_code = _build_update_manager_apk(env, log_file=log_file)
+        if exit_code != 0:
+            BUILD_STATE["message"] = f"Installer build failed (exit {exit_code}). See log below."
+            return
+        um_apk = APK_DIR / UPDATE_MANAGER_APK
+        if not um_apk.is_file() or um_apk.stat().st_size < 5_000:
+            BUILD_STATE["message"] = "Installer APK missing after build."
+            return
+        BUILD_STATE["phase"] = "registering"
+        with db_connect() as connection:
+            ensure_app_releases_table(connection)
+            _register_update_manager_release(
+                connection,
+                version_name,
+                version_code,
+                release_notes,
+            )
+            connection.commit()
+        server = read_server_config_from_db()
+        apk_url = f"http://{server['host']}:{server['port']}/apk/{UPDATE_MANAGER_APK}"
+        BUILD_STATE["last_ok"] = True
+        BUILD_STATE["message"] = (
+            f"Installer built: v{version_name} ({version_code}) → {UPDATE_MANAGER_APK}. "
+            f"Download: {apk_url}"
+        )
+    except subprocess.TimeoutExpired:
+        BUILD_STATE["message"] = "Installer build timed out after 5 minutes"
+    except Exception as exc:
+        BUILD_STATE["message"] = str(exc)
+    finally:
+        BUILD_STATE["running"] = False
+        BUILD_STATE["finished_at"] = int(time.time())
+        BUILD_STATE["phase"] = "idle" if BUILD_STATE["last_ok"] else "failed"
+
+
+def start_installer_build(*, auto_bump=True, release_notes=""):
+    with BUILD_LOCK:
+        if BUILD_STATE["running"]:
+            return False, "A build is already running"
+        thread = threading.Thread(
+            target=_run_installer_build_thread,
+            kwargs={"auto_bump": auto_bump, "release_notes": release_notes},
+            daemon=True,
+        )
+        thread.start()
+        return True, "Installer build started — refresh this page for status."
 
 
 def _run_build_thread(
@@ -299,7 +433,9 @@ def _run_build_thread(
             BUILD_STATE["message"] = f"Build failed (exit {result.returncode}). See build log below."
             return
 
-        _build_update_manager_apk(env)
+        with open(BUILD_LOG, "a", encoding="utf-8") as installer_log:
+            installer_log.write("\n=== Installer APK (after DSM build) ===\n")
+            _build_update_manager_apk(env, log_file=installer_log)
 
         BUILD_STATE["phase"] = "publishing"
         BUILD_STATE["message"] = "Publishing APK..."

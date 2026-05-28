@@ -3337,6 +3337,9 @@ class ApiHandler(BaseHTTPRequestHandler):
         if path == "/app-release-center/build-push":
             self.app_release_build_push()
             return
+        if path == "/app-release-center/build-installer":
+            self.app_release_build_installer()
+            return
         if path == "/app-release-center/push":
             self.app_release_push()
             return
@@ -3402,6 +3405,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             "/app-release-center",
             "/app-release-center/build",
             "/app-release-center/build-push",
+            "/app-release-center/build-installer",
             "/app-release-center/push",
             "/app-release-center/push-release",
             "/app-release-center/delete-releases",
@@ -4137,6 +4141,16 @@ class ApiHandler(BaseHTTPRequestHandler):
             auto_push=False,
         )
         self.send_html(render_app_release_center(message))
+
+    def app_release_build_installer(self):
+        body = self.read_form_body()
+        auto_bump = str(body.get("autoBump", ["on"])[0]).strip().lower() in ("on", "1", "true", "yes")
+        release_notes = str(body.get("releaseNotes", [""])[0]).strip()
+        ok, message = app_release.start_installer_build(
+            auto_bump=auto_bump,
+            release_notes=release_notes or "Orphen APK Installer — built from server UI",
+        )
+        self.send_html(render_app_release_center(message, building=ok, detail=message if ok else ""))
 
     def app_release_build_push(self):
         body = self.read_form_body()
@@ -5503,11 +5517,22 @@ def render_app_release_center(message="", building=False, detail=""):
             "(function poll(){fetch('/app-release-center/status.json',{credentials:'same-origin'})"
             ".then(r=>r.json()).then(s=>{"
             "var el=document.getElementById('build-status-line');"
-            "if(el)el.textContent=s.message||'Working...';"
+            "var iel=document.getElementById('installer-build-status-line');"
+            "var msg=s.message||'Working...';"
+            "if(el)el.textContent=msg;"
+            "if(iel)iel.textContent=msg;"
             "if(s.running)setTimeout(poll,2500);else if(s.running===false)location.reload();"
             "}).catch(()=>setTimeout(poll,4000));})();"
             "</script>"
         )
+    installer_props = build_status.get("installerVersion") or {}
+    installer_current = escape(
+        f"{installer_props.get('versionName', '—')} (code {installer_props.get('versionCode', '—')})"
+    )
+    installer_next_name = escape(str(build_status.get("installerNextVersionName") or ""))
+    installer_next_code = escape(str(build_status.get("installerNextVersionCode") or ""))
+    installer_apk_url = escape(str(build_status.get("installerApkUrl") or ""))
+    installer_ready = "yes" if build_status.get("installerApkReady") else "no"
     with db_connect() as connection:
         releases = app_release.list_releases(connection)
     release_rows = ""
@@ -5626,12 +5651,32 @@ def render_app_release_center(message="", building=False, detail=""):
         "<th>App</th><th>Package</th><th>Version</th><th>Code</th><th>APK file</th><th>Active</th><th>Created</th><th>Actions</th>"
         "</tr></thead>"
         f"<tbody>{release_rows}</tbody></table></div>"
-        "<h3 class=\"h6 mt-4\">Orphen APK Installer (install once per phone)</h3>"
-        "<p class=\"text-secondary mb-0\">Download <code>/apk/oui.apk</code> (installer) and install on each phone. "
-        "It polls the server catalog, installs newer APKs, then <strong>deletes</strong> the downloaded file. "
-        f"Catalog: <code>http://{escape(server.get('host'))}:{escape(server.get('port'))}/api/update-manager/catalog</code></p>"
-        "<p class=\"text-secondary small mt-2 mb-0\">After a one-click server build, installer APK is rebuilt automatically when possible.</p>"
         f"{release_catalog_script}"
+        "</section>"
+        '<section class="admin-card p-4 border border-primary">'
+        "<h2 class=\"h5\">Orphen APK Installer — one-click server build</h2>"
+        "<p class=\"text-secondary\">No SSH or long script names. Builds <code>apk/oui.apk</code> on this server "
+        "(same as <code>scripts/build-update-manager-apk.sh</code>).</p>"
+        f"<p class=\"mb-2\"><strong>On disk now:</strong> {installer_ready} · current version {installer_current}</p>"
+        f'<p class="mb-2"><strong>Download URL:</strong> <a href="{installer_apk_url}">{installer_apk_url}</a></p>'
+        f'<p class="mb-2"><strong>Build status:</strong> <span id="installer-build-status-line">{status_line}</span></p>'
+        '<form method="post" action="/app-release-center/build-installer" class="mb-2">'
+        '<input type="hidden" name="autoBump" value="on">'
+        '<div class="row g-2 mb-2">'
+        '<div class="col-md-3"><label class="form-label">Next version name</label>'
+        f'<input class="form-control" name="versionName" value="{installer_next_name}" readonly></div>'
+        '<div class="col-md-3"><label class="form-label">Next version code</label>'
+        f'<input class="form-control" name="versionCode" value="{installer_next_code}" readonly></div>'
+        '<div class="col-md-6"><label class="form-label">Release notes (optional)</label>'
+        '<input class="form-control" name="releaseNotes" placeholder="Installer changelog"></div>'
+        "</div>"
+        '<button class="btn btn-primary btn-lg" type="submit"'
+        + (" disabled" if not sdk_ready or build_status.get("running") else "")
+        + ">Build installer APK (oui.apk)</button>"
+        "</form>"
+        "<p class=\"text-secondary small mb-0\">Install once per phone. Catalog: "
+        f"<code>http://{escape(server.get('host'))}:{escape(server.get('port'))}/api/update-manager/catalog</code>. "
+        "DSM one-click build also rebuilds the installer when possible.</p>"
         "</section>"
     )
     return render_admin_page(
