@@ -16,6 +16,7 @@ public class UpdateSyncService extends Service {
     public static final String ACTION_START = "com.orphen.updatemanager.START_WATCH";
     private static final String TAG = "UpdateSyncService";
     private static final long POLL_MS = 10_000L;
+    private static final long AUTO_UPDATE_COOLDOWN_MS = 3 * 60_000L;
     private static final int FG_ID = 7101;
     private static final int UPDATE_NOTIFY_ID = 7102;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -75,6 +76,7 @@ public class UpdateSyncService extends Service {
                     if (needed) {
                         showUpdateAvailableNotification(catalog);
                         sendBroadcast(new Intent(UpdateEngine.ACTION_UPDATE_AVAILABLE).setPackage(getPackageName()));
+                        maybeRunAutoUpdate();
                     } else {
                         cancelUpdateNotification();
                         UpdateEngine.broadcastState(UpdateSyncService.this, "Up to date");
@@ -132,6 +134,24 @@ public class UpdateSyncService extends Service {
         if (manager != null) {
             manager.cancel(UPDATE_NOTIFY_ID);
         }
+    }
+
+    private void maybeRunAutoUpdate() {
+        if (UpdateEngine.isUpdateRunning()) {
+            return;
+        }
+        android.content.SharedPreferences prefs = PrefsHelper.prefs(this);
+        if (!prefs.getBoolean(PrefsHelper.KEY_AUTO_UPDATE_ENABLED, true)) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        long lastAttempt = prefs.getLong(PrefsHelper.KEY_LAST_AUTO_UPDATE_AT, 0L);
+        if (lastAttempt > 0L && now - lastAttempt < AUTO_UPDATE_COOLDOWN_MS) {
+            return;
+        }
+        prefs.edit().putLong(PrefsHelper.KEY_LAST_AUTO_UPDATE_AT, now).apply();
+        UpdateEngine.broadcastState(this, "Auto-update triggered");
+        UpdateEngine.runUpdate(getApplicationContext(), null);
     }
 
     private void ensureChannels() {

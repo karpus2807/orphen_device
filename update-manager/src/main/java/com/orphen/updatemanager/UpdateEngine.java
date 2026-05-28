@@ -2,6 +2,8 @@ package com.orphen.updatemanager;
 
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.util.Log;
 
 import java.io.File;
@@ -157,10 +159,15 @@ public final class UpdateEngine {
                             catalog.packageName,
                             catalog.versionCode
                     );
-                    broadcastState(context, "Installing… Confirm if Android asks.");
+                    if (!canAttemptPackageInstall(context)) {
+                        broadcastState(context, "Install blocked: allow 'Install unknown apps' for Orphen APK Installer.");
+                        saveCatalogSnapshot(context, catalog, true);
+                        return;
+                    }
+                    broadcastState(context, "Installing…");
                     ApkInstaller.installApk(context, apk, catalog.packageName, catalog.versionCode);
                     saveCatalogSnapshot(context, catalog, true);
-                    broadcastState(context, "Install started — allow install when prompted");
+                    broadcastState(context, "Install started");
                 } catch (Exception exception) {
                     Log.w(TAG, "update failed: " + exception.getMessage());
                     broadcastState(context, "Update failed: " + exception.getMessage());
@@ -172,6 +179,18 @@ public final class UpdateEngine {
                 }
             }
         }).start();
+    }
+
+    private static boolean canAttemptPackageInstall(Context context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return true;
+        }
+        try {
+            PackageManager packageManager = context.getPackageManager();
+            return packageManager != null && packageManager.canRequestPackageInstalls();
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     public static final class InstalledVersion {

@@ -82,6 +82,7 @@ public class MainActivity extends Activity {
         statusView.setTextSize(14);
         statusView.setTextColor(0xFF555555);
         statusView.setPadding(0, 0, 0, 16);
+        statusView.setText("Auto-update is ON. Installer will download/install when server has newer build.");
         root.addView(statusView);
 
         LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(

@@ -11,6 +11,8 @@ public final class PrefsHelper {
     public static final String KEY_CATALOG_APK_URL = "catalog_apk_url";
     public static final String KEY_LAST_REFRESH_AT = "last_refresh_at";
     public static final String KEY_UPDATE_AVAILABLE = "update_available";
+    public static final String KEY_AUTO_UPDATE_ENABLED = "auto_update_enabled";
+    public static final String KEY_LAST_AUTO_UPDATE_AT = "last_auto_update_at";
 
     private PrefsHelper() {
     }
@@ -26,6 +28,9 @@ public final class PrefsHelper {
                     .putString("serverHost", "ipserver.in")
                     .putString("serverPort", "9030")
                     .apply();
+        }
+        if (!prefs.contains(KEY_AUTO_UPDATE_ENABLED)) {
+            prefs.edit().putBoolean(KEY_AUTO_UPDATE_ENABLED, true).apply();
         }
     }
 
