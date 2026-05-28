@@ -70,6 +70,7 @@ public final class LocationHelper {
                 }
             };
         }
+        boolean subscribed = false;
         try {
             Location cached = pickBetter(
                     manager.getLastKnownLocation(LocationManager.GPS_PROVIDER),
@@ -86,6 +87,7 @@ public final class LocationHelper {
                         locationListener,
                         Looper.getMainLooper()
                 );
+                    subscribed = true;
             }
             if (manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
                 manager.requestLocationUpdates(
@@ -95,9 +97,12 @@ public final class LocationHelper {
                         locationListener,
                         Looper.getMainLooper()
                 );
+                subscribed = true;
             }
-            tracking = true;
+            // Keep tracking false when no provider is enabled so future sync loops can retry.
+            tracking = subscribed;
         } catch (SecurityException ignored) {
+            tracking = false;
         }
     }
 

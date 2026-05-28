@@ -1923,11 +1923,12 @@ def perform_bulk_device_action(device_ids, action, payload="", group_name=""):
                 "unlock_app",
                 "refresh_telemetry",
             }:
-                if action == "show_alert" and not str(payload).strip():
+                command_payload = payload
+                if action == "show_alert" and not str(command_payload).strip():
                     raise RuntimeError("Alert message is required")
                 if action == "push_server_config":
                     remote_config = read_server_config()
-                    payload = json.dumps(
+                    command_payload = json.dumps(
                         {
                             "mode": "remote",
                             "host": remote_config["host"],
@@ -1935,31 +1936,31 @@ def perform_bulk_device_action(device_ids, action, payload="", group_name=""):
                         }
                     )
                 if action == "push_app_update":
-                    payload = json.dumps(build_ota_payload())
-                if action == "push_wifi_profile" and not str(payload).strip():
+                    command_payload = json.dumps(build_ota_payload())
+                if action == "push_wifi_profile" and not str(command_payload).strip():
                     wifi_config = read_device_wifi_profile_config(device_id)
                     if not str(wifi_config.get("ssid", "")).strip():
                         raise RuntimeError("Save a Wi-Fi profile for this device first")
-                    payload = json.dumps(wifi_config)
+                    command_payload = json.dumps(wifi_config)
                 if action == "start_audio_stream":
                     audio_stream.request_stream(device_id, True)
-                    payload = ""
+                    command_payload = ""
                 if action == "stop_audio_stream":
                     audio_stream.stop_stream(device_id)
                     update_device_telemetry_from_body(device_id, {"audioStreamActive": False})
-                    payload = ""
+                    command_payload = ""
                 if action == "start_remote_session":
                     remote_ops.request_session(device_id, True)
-                    payload = ""
+                    command_payload = ""
                 if action == "stop_remote_session":
                     remote_ops.stop_session(device_id)
-                    payload = ""
+                    command_payload = ""
                 if action in {"lock_app", "hide_app", "show_app", "unlock_app"}:
                     apply_admin_security_command(device_id, action)
-                    payload = ""
+                    command_payload = ""
                 if action == "refresh_telemetry":
-                    payload = ""
-                command_id = create_device_command(device_id, action, payload)
+                    command_payload = ""
+                command_id = create_device_command(device_id, action, command_payload)
                 results.append({"deviceId": device_id, "ok": True, "message": f"Command #{command_id} queued"})
             else:
                 raise RuntimeError("Unknown bulk action")

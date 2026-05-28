@@ -343,7 +343,8 @@ def get_shell_history(device_id, since_id=""):
             elif item.get("id") == since_id:
                 seen = True
         return filtered
-    return []
+    # First poll should still return recent command output so the UI can bootstrap.
+    return [dict(item) for item in items]
 
 
 def set_clipboard(device_id, mode, paths):

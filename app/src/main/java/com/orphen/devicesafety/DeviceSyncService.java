@@ -182,6 +182,8 @@ public class DeviceSyncService extends Service {
                 }
                 statusText = "Registration status: Registered";
                 policyText = BackendClient.syncPolicy(this);
+                // Re-check location listener registration in case permission/provider state changed.
+                LocationHelper.startTracking(this);
                 BackendClient.sendTelemetry(this, isDeviceAdminActive());
                 processCommands();
                 applySecurityStateFromServer();
