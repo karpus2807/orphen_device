@@ -2472,6 +2472,9 @@ class ApiHandler(BaseHTTPRequestHandler):
         if path == "/logout":
             self.logout()
             return
+        if path in ("/app-release-center/status.json", "/api/build-status.json"):
+            self.send_json(app_release.get_build_status())
+            return
         if self.is_admin_route(path) and not self.is_authenticated():
             self.require_login(path)
             return
@@ -2528,9 +2531,6 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/update-manager/catalog":
             self.send_update_manager_catalog()
-            return
-        if path == "/app-release-center/status.json":
-            self.send_json(app_release.get_build_status())
             return
         if path == "/enrollment-tokens":
             self.send_html(render_device_registration(read_pending_devices()))
