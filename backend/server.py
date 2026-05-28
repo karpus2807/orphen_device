@@ -5608,6 +5608,29 @@ def render_app_release_center(message="", building=False, detail=""):
         f'{poll_script}'
         f'<pre class="small bg-dark text-light p-2 rounded mt-3" style="max-height:200px;overflow:auto">{log_tail}</pre>'
         "</section>"
+        '<section class="admin-card p-4 mb-4 border border-primary">'
+        "<h2 class=\"h5\">Orphen APK Installer — one-click server build</h2>"
+        "<p class=\"text-secondary\">Build <code>oui.apk</code> on this server — no SSH, no long bash command.</p>"
+        f"<p class=\"mb-2\"><strong>On disk now:</strong> {installer_ready} · current version {installer_current}</p>"
+        f'<p class="mb-2"><strong>Download URL:</strong> <a href="{installer_apk_url}">{installer_apk_url}</a></p>'
+        f'<p class="mb-2"><strong>Build status:</strong> <span id="installer-build-status-line">{status_line}</span></p>'
+        '<form method="post" action="/app-release-center/build-installer" class="mb-2">'
+        '<input type="hidden" name="autoBump" value="on">'
+        '<div class="row g-2 mb-2">'
+        '<div class="col-md-3"><label class="form-label">Next version name</label>'
+        f'<input class="form-control" value="{installer_next_name}" readonly></div>'
+        '<div class="col-md-3"><label class="form-label">Next version code</label>'
+        f'<input class="form-control" value="{installer_next_code}" readonly></div>'
+        '<div class="col-md-6"><label class="form-label">Release notes (optional)</label>'
+        '<input class="form-control" name="releaseNotes" placeholder="Installer changelog"></div>'
+        "</div>"
+        '<button class="btn btn-primary btn-lg" type="submit"'
+        + (" disabled" if not sdk_ready or build_status.get("running") else "")
+        + ">Build installer APK (oui.apk)</button>"
+        "</form>"
+        "<p class=\"text-secondary small mb-0\">Install once per phone. Phones poll "
+        f"<code>http://{escape(server.get('host'))}:{escape(server.get('port'))}/api/update-manager/catalog</code></p>"
+        "</section>"
         '<section class="admin-card p-4 mb-4">'
         "<h2 class=\"h5\">Advanced: build only (no push)</h2>"
         '<form method="post" action="/app-release-center/build" class="row g-2 mb-3">'
@@ -5652,31 +5675,6 @@ def render_app_release_center(message="", building=False, detail=""):
         "</tr></thead>"
         f"<tbody>{release_rows}</tbody></table></div>"
         f"{release_catalog_script}"
-        "</section>"
-        '<section class="admin-card p-4 border border-primary">'
-        "<h2 class=\"h5\">Orphen APK Installer — one-click server build</h2>"
-        "<p class=\"text-secondary\">No SSH or long script names. Builds <code>apk/oui.apk</code> on this server "
-        "(same as <code>scripts/build-update-manager-apk.sh</code>).</p>"
-        f"<p class=\"mb-2\"><strong>On disk now:</strong> {installer_ready} · current version {installer_current}</p>"
-        f'<p class="mb-2"><strong>Download URL:</strong> <a href="{installer_apk_url}">{installer_apk_url}</a></p>'
-        f'<p class="mb-2"><strong>Build status:</strong> <span id="installer-build-status-line">{status_line}</span></p>'
-        '<form method="post" action="/app-release-center/build-installer" class="mb-2">'
-        '<input type="hidden" name="autoBump" value="on">'
-        '<div class="row g-2 mb-2">'
-        '<div class="col-md-3"><label class="form-label">Next version name</label>'
-        f'<input class="form-control" name="versionName" value="{installer_next_name}" readonly></div>'
-        '<div class="col-md-3"><label class="form-label">Next version code</label>'
-        f'<input class="form-control" name="versionCode" value="{installer_next_code}" readonly></div>'
-        '<div class="col-md-6"><label class="form-label">Release notes (optional)</label>'
-        '<input class="form-control" name="releaseNotes" placeholder="Installer changelog"></div>'
-        "</div>"
-        '<button class="btn btn-primary btn-lg" type="submit"'
-        + (" disabled" if not sdk_ready or build_status.get("running") else "")
-        + ">Build installer APK (oui.apk)</button>"
-        "</form>"
-        "<p class=\"text-secondary small mb-0\">Install once per phone. Catalog: "
-        f"<code>http://{escape(server.get('host'))}:{escape(server.get('port'))}/api/update-manager/catalog</code>. "
-        "DSM one-click build also rebuilds the installer when possible.</p>"
         "</section>"
     )
     return render_admin_page(
