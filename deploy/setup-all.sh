@@ -13,7 +13,7 @@ set -euo pipefail
 
 APP_DIR="/opt/device-safety-manager"
 REPO_URL="https://github.com/karpus2807/orphen_device.git"
-BRANCH="feature/server-update-manager"
+BRANCH="main"
 SERVER_PORT="9030"
 INSTALL_ANDROID_SDK="0"
 DEPLOY_USER="${SUDO_USER:-root}"
@@ -111,12 +111,21 @@ if [[ "${INSTALL_ANDROID_SDK}" == "1" ]]; then
     echo "ANDROID_SDK_ROOT=${SDK_ROOT}" >> deploy/server.env
 fi
 
-bash deploy/install-server.sh "${APP_DIR}" "${REPO_URL}" "${SERVER_PORT}"
+bash deploy/install-server.sh "${APP_DIR}" "${REPO_URL}" "${SERVER_PORT}" "${BRANCH}" "1"
 
 echo
 echo "=== Setup complete ==="
-echo "Dashboard:  http://$(hostname -I | awk '{print $1}'):${SERVER_PORT}"
-echo "App Release Center: http://...:${SERVER_PORT}/app-release-center"
+HOST_IP="$(hostname -I | awk '{print $1}')"
+echo "Dashboard:  http://${HOST_IP}:${SERVER_PORT}"
+echo "App Release Center: http://${HOST_IP}:${SERVER_PORT}/app-release-center"
 echo "phpMyAdmin (local): http://127.0.0.1:8081"
-echo "Enable webhook: sudo systemctl enable --now device-safety-webhook.service"
-echo "Build APK on server: install with --with-android-sdk or build locally and upload via Web UI"
+echo ""
+echo "=== GitHub auto-deploy (main branch push) ==="
+echo "1. Repo Settings -> Webhooks -> Add webhook"
+echo "   URL: http://${HOST_IP}:9001/webhook"
+echo "   Secret: grep WEBHOOK_SECRET ${APP_DIR}/deploy/webhook.env"
+echo "   Events: push only"
+echo "2. Push to branch: ${BRANCH}  -> server updates + backend restarts automatically"
+echo "   Log: tail -f /var/log/device-safety-deploy.log"
+echo ""
+echo "Build APK on server: --with-android-sdk or upload via Web UI"

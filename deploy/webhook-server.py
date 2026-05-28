@@ -42,14 +42,17 @@ def run_deploy():
     env = os.environ.copy()
     env["APP_DIR"] = APP_DIR
     env["DEPLOY_BRANCH"] = BRANCH
-    subprocess.Popen(
-        ["/bin/bash", DEPLOY_SCRIPT],
-        cwd=APP_DIR,
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    log_path = os.environ.get("DEPLOY_LOG", "/var/log/device-safety-deploy.log")
+    with open(log_path, "a", encoding="utf-8") as log_f:
+        log_f.write(f"\n[{__import__('datetime').datetime.now().isoformat()}] webhook triggered deploy\n")
+        subprocess.Popen(
+            ["/bin/bash", DEPLOY_SCRIPT],
+            cwd=APP_DIR,
+            env=env,
+            stdout=log_f,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
 
 
 class WebhookHandler(BaseHTTPRequestHandler):

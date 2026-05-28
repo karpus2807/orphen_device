@@ -65,13 +65,17 @@ sudo journalctl -u device-safety-backend -f
 
 ## 5. Auto-deploy when GitHub repo changes
 
+`setup-all.sh` and `install-server.sh` enable the webhook service by default. On every push to **`main`**, the server runs `deploy/deploy.sh`: hard reset to latest code (old program files replaced), then **restarts** `device-safety-backend` so the app auto-starts.
+
+See also: [MAIN_SERVER_SETUP.md](../docs/MAIN_SERVER_SETUP.md)
+
 ### Option A — GitHub webhook (recommended, instant)
 
-1. Start webhook service on server:
+1. Confirm webhook service is running:
 
 ```bash
-sudo systemctl enable --now device-safety-webhook.service
-sudo cat /opt/device-safety-manager/deploy/webhook.env   # copy WEBHOOK_SECRET
+sudo systemctl status device-safety-webhook.service
+sudo grep WEBHOOK_SECRET /opt/device-safety-manager/deploy/webhook.env
 ```
 
 2. GitHub repo → **Settings → Webhooks → Add webhook**
