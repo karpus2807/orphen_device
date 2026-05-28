@@ -14,6 +14,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 
@@ -101,20 +102,22 @@ public final class ApkInstaller {
         HttpURLConnection connection = (HttpURLConnection) new URL(apkUrl).openConnection();
         connection.setConnectTimeout(30_000);
         connection.setReadTimeout(120_000);
-        connection.connect();
-        if (connection.getResponseCode() < 200 || connection.getResponseCode() >= 300) {
-            throw new Exception("HTTP " + connection.getResponseCode());
+        try {
+            connection.connect();
+            if (connection.getResponseCode() < 200 || connection.getResponseCode() >= 300) {
+                throw new Exception("HTTP " + connection.getResponseCode());
+            }
+            try (InputStream input = new BufferedInputStream(connection.getInputStream());
+                    FileOutputStream output = new FileOutputStream(out, false)) {
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = input.read(buffer)) != -1) {
+                    output.write(buffer, 0, read);
+                }
+            }
+        } finally {
+            connection.disconnect();
         }
-        InputStream input = new BufferedInputStream(connection.getInputStream());
-        FileOutputStream output = new FileOutputStream(out, false);
-        byte[] buffer = new byte[8192];
-        int read;
-        while ((read = input.read(buffer)) != -1) {
-            output.write(buffer, 0, read);
-        }
-        output.close();
-        input.close();
-        connection.disconnect();
         if (out.length() < 50_000L) {
             out.delete();
             throw new Exception("Download too small");
@@ -130,16 +133,15 @@ public final class ApkInstaller {
         int sessionId = installer.createSession(params);
         PackageInstaller.Session session = installer.openSession(sessionId);
         try {
-            FileInputStream in = new FileInputStream(apkFile);
-            OutputStreamWrapper out = new OutputStreamWrapper(session.openWrite("base.apk", 0, apkFile.length()));
-            byte[] buffer = new byte[65536];
-            int read;
-            while ((read = in.read(buffer)) != -1) {
-                out.write(buffer, 0, read);
+            try (FileInputStream in = new FileInputStream(apkFile);
+                    OutputStream out = session.openWrite("base.apk", 0, apkFile.length())) {
+                byte[] buffer = new byte[65536];
+                int read;
+                while ((read = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, read);
+                }
+                session.fsync(out);
             }
-            session.fsync(out.getStream());
-            out.close();
-            in.close();
             Intent callback = new Intent(context, InstallResultReceiver.class);
             callback.putExtra(EXTRA_APK_PATH, apkFile.getAbsolutePath());
             callback.putExtra(EXTRA_PACKAGE_NAME, packageName);
@@ -191,26 +193,6 @@ public final class ApkInstaller {
             if (!file.delete()) {
                 Log.w(TAG, "Could not delete stale apk " + file.getName());
             }
-        }
-    }
-
-    private static final class OutputStreamWrapper {
-        private final java.io.OutputStream stream;
-
-        OutputStreamWrapper(java.io.OutputStream stream) {
-            this.stream = stream;
-        }
-
-        void write(byte[] buffer, int offset, int count) throws java.io.IOException {
-            stream.write(buffer, offset, count);
-        }
-
-        void close() throws java.io.IOException {
-            stream.close();
-        }
-
-        java.io.OutputStream getStream() {
-            return stream;
         }
     }
 }

@@ -24,15 +24,18 @@ public final class CatalogFetcher {
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
         connection.setConnectTimeout(15_000);
         connection.setReadTimeout(20_000);
-        connection.connect();
-        BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
         StringBuilder body = new StringBuilder();
-        String line;
-        while ((line = reader.readLine()) != null) {
-            body.append(line);
+        try {
+            connection.connect();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    body.append(line);
+                }
+            }
+        } finally {
+            connection.disconnect();
         }
-        reader.close();
-        connection.disconnect();
 
         JSONObject json = new JSONObject(body.toString());
         JSONArray releases = json.optJSONArray("releases");

@@ -36,12 +36,12 @@ public final class BackendClient {
         return prefs(context).getString("deviceToken", "").trim().length() > 0;
     }
 
-    public static boolean saveDeviceToken(Context context, String token) {
-        return prefs(context).edit().putString("deviceToken", token.trim()).commit();
+    public static void saveDeviceToken(Context context, String token) {
+        prefs(context).edit().putString("deviceToken", token.trim()).apply();
     }
 
     public static void clearDeviceToken(Context context) {
-        prefs(context).edit().remove("deviceToken").commit();
+        prefs(context).edit().remove("deviceToken").apply();
     }
 
     public static String getDeviceId(Context context) {
@@ -253,7 +253,7 @@ public final class BackendClient {
         } else {
             editor.remove("enrollmentToken");
         }
-        editor.commit();
+        editor.apply();
     }
 
     /** @deprecated use {@link #saveEnrollmentConfig(Context, EnrollmentConfig)} */
@@ -278,8 +278,6 @@ public final class BackendClient {
             if (!isRemoteHostUsable(host)) {
                 throw new Exception("Remote host must be a reachable LAN IP or hostname");
             }
-        } else if (!isValidPort(port)) {
-            throw new Exception("Port must be a number between 1 and 65535");
         }
 
         if (!isValidPort(port)) {
@@ -292,7 +290,7 @@ public final class BackendClient {
                 .putString("backendHost", MODE_REMOTE.equals(mode) ? host : "")
                 .putString("backendPort", port)
                 .putBoolean("networkConfigured", true)
-                .commit();
+                .apply();
         return backendUrl;
     }
 
@@ -357,13 +355,13 @@ public final class BackendClient {
         if (stream == null) {
             return "";
         }
-        BufferedReader reader = new BufferedReader(new InputStreamReader(stream, "UTF-8"));
         StringBuilder response = new StringBuilder();
-        String line;
-        while ((line = reader.readLine()) != null) {
-            response.append(line);
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, "UTF-8"))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                response.append(line);
+            }
         }
-        reader.close();
         return response.toString();
     }
 
@@ -384,6 +382,9 @@ public final class BackendClient {
     }
 
     public static String extractJsonValue(String json, String key) {
+        if (json == null || key == null || key.isEmpty()) {
+            return "";
+        }
         String marker = "\"" + key + "\":";
         int keyIndex = json.indexOf(marker);
         if (keyIndex < 0) {
