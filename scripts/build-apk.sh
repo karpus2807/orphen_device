@@ -3,14 +3,51 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BT="${ANDROID_BUILD_TOOLS:-$HOME/Android/Sdk/build-tools/36.1.0}"
-PLATFORM="${ANDROID_PLATFORM:-$HOME/Android/Sdk/platforms/android-36/android.jar}"
 ZXING="${ROOT}/app/libs/core-3.5.3.jar"
 OUT="${ROOT}/build/device-safety-manager-debug.apk"
 UNSIGNED="${ROOT}/build/unsigned.apk"
 
+resolve_sdk() {
+  local sdk_root=""
+  if [[ -n "${ANDROID_SDK_ROOT:-}" ]]; then
+    sdk_root="${ANDROID_SDK_ROOT}"
+  elif [[ -f "${ROOT}/deploy/server.env" ]]; then
+    sdk_root="$(grep -E '^ANDROID_SDK_ROOT=' "${ROOT}/deploy/server.env" | cut -d= -f2- | tr -d ' \r' || true)"
+  fi
+  if [[ -z "${sdk_root}" && -d /opt/android-sdk ]]; then
+    sdk_root="/opt/android-sdk"
+  fi
+  if [[ -z "${sdk_root}" && -d "${HOME}/Android/Sdk" ]]; then
+    sdk_root="${HOME}/Android/Sdk"
+  fi
+  if [[ -z "${sdk_root}" ]]; then
+    echo "Android SDK not found. Set ANDROID_SDK_ROOT or run: sudo bash scripts/install-android-sdk-server.sh" >&2
+    exit 1
+  fi
+  BT=""
+  if [[ -d "${sdk_root}/build-tools" ]]; then
+    BT="$(find "${sdk_root}/build-tools" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort -V | tail -1)"
+  fi
+  PLATFORM=""
+  for api in 36 34; do
+    if [[ -f "${sdk_root}/platforms/android-${api}/android.jar" ]]; then
+      PLATFORM="${sdk_root}/platforms/android-${api}/android.jar"
+      break
+    fi
+  done
+  export ANDROID_SDK_ROOT="${sdk_root}"
+  export ANDROID_BUILD_TOOLS="${BT}"
+  export ANDROID_PLATFORM="${PLATFORM}"
+}
+
+resolve_sdk
+
 if [[ ! -x "${BT}/aapt2" ]]; then
-  echo "Missing aapt2 at ${BT}/aapt2" >&2
+  echo "Missing aapt2 at ${BT}/aapt2 (SDK: ${ANDROID_SDK_ROOT})" >&2
+  exit 1
+fi
+if [[ ! -f "${PLATFORM}" ]]; then
+  echo "Missing platform jar at ${PLATFORM}" >&2
   exit 1
 fi
 

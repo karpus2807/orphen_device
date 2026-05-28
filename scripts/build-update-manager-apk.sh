@@ -34,16 +34,16 @@ if [[ -d "${SRC}/res" ]]; then
   "${BT}/aapt2" link \
     -I "${PLATFORM}" \
     --manifest "${SRC}/AndroidManifest.xml" \
-    --version-code 3 \
-    --version-name "1.0.2" \
+    --version-code 4 \
+    --version-name "1.0.3" \
     -o "${UNSIGNED}" \
     build/um-compiled/resources.zip
 else
   "${BT}/aapt2" link \
     -I "${PLATFORM}" \
     --manifest "${SRC}/AndroidManifest.xml" \
-    --version-code 3 \
-    --version-name "1.0.2" \
+    --version-code 4 \
+    --version-name "1.0.3" \
     -o "${UNSIGNED}"
 fi
 
@@ -56,8 +56,9 @@ echo "DEX..."
   build/um-classes/com/orphen/updatemanager/*.class
 
 echo "Packaging..."
+rm -f "${UNSIGNED}"
 (cd build/um-dex && zip -q "../update-manager-unsigned.apk" classes.dex)
-mv -f build/update-manager-unsigned.apk "${UNSIGNED}"
+test -f build/update-manager-unsigned.apk && mv -f build/update-manager-unsigned.apk "${UNSIGNED}"
 
 if [[ ! -f build/debug.keystore ]]; then
   keytool -genkeypair -v \
