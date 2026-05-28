@@ -66,9 +66,7 @@ echo "DEX..."
   build/um-classes/com/orphen/updatemanager/*.class
 
 echo "Packaging..."
-rm -f "${UNSIGNED}"
-(cd build/um-dex && zip -q "../update-manager-unsigned.apk" classes.dex)
-test -f build/update-manager-unsigned.apk && mv -f build/update-manager-unsigned.apk "${UNSIGNED}"
+(cd build/um-dex && zip -q -u "${UNSIGNED}" classes.dex)
 
 if [[ ! -f build/debug.keystore ]]; then
   keytool -genkeypair -v \
