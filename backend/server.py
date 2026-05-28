@@ -43,7 +43,7 @@ SMTP_FILE = ROOT / "data" / "smtp_config.json"
 RESET_TOKENS_FILE = ROOT / "data" / "password_resets.json"
 DATABASE_FILE = ROOT / "data" / "device_safety.db"
 SCHEMA_FILE = ROOT / "schema.sql"
-ONLINE_TIMEOUT_SECONDS = 90
+ONLINE_TIMEOUT_SECONDS = 600
 STATUS_POLL_SECONDS = 30
 SYNC_HISTORY_LIMIT = (
     10_000_000
@@ -713,6 +713,18 @@ def upsert_device_checkin(body, incoming_device_token=""):
     if server_has_token:
         response["serverRegistered"] = True
     return response
+
+
+def touch_device_last_seen(device_id):
+    device_id = str(device_id or "").strip()
+    if not device_id:
+        return
+    now = int(time.time())
+    with db_connect() as connection:
+        connection.execute(
+            "UPDATE devices SET last_seen_at = ?, deregistered_at = NULL WHERE device_id = ?",
+            (now, device_id),
+        )
 
 
 def consume_pending_device_token(device_id):
@@ -1744,8 +1756,7 @@ def record_status_transition(device_id, device):
     if previous_status != current_status:
         DEVICE_LAST_STATUS[device_id] = current_status
         record_device_event(device_id, f"status_{current_status}", f"Device is now {current_status}")
-        if previous_status is not None:
-            notify_device_status_change(device_id, device, previous_status, current_status)
+        # Keep status events in timeline, but avoid heartbeat-driven email noise.
 
 
 def get_device_timeline(device_id, hours=24):
@@ -3241,6 +3252,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             if not device_token_valid(device_id, get_device_token_from_headers(self)):
                 self.send_json({"error": "unauthorized_device"}, status=401)
                 return
+            touch_device_last_seen(device_id)
             commands = fetch_pending_commands(device_id)
             self.send_json({"ok": True, "commands": commands})
             return
@@ -3854,6 +3866,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         if not device_token_valid(device_id, get_device_token_from_headers(self)):
             self.send_json({"error": "unauthorized_device"}, status=401)
             return
+        touch_device_last_seen(device_id)
         update_device_telemetry_from_body(device_id, body)
         self.send_json({"ok": True})
 
