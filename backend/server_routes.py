@@ -6,6 +6,8 @@ ADMIN_ROUTES = {
     "/devices/location",
     "/devices/location.json",
     "/devices/location/history.json",
+    "/devices/location/history-view",
+    "/devices/location/route.json",
     "/devices/location/geocode.json",
     "/devices/call-log",
     "/devices/call-log.json",

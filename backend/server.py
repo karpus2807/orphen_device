@@ -370,6 +370,35 @@ def parse_location_history_filters(query):
     return search, from_ts, to_ts
 
 
+def parse_datetime_local(value):
+    value = str(value or "").strip()
+    if not value:
+        return None
+    try:
+        if "T" in value:
+            date_part, time_part = value.split("T", 1)
+        else:
+            date_part, time_part = value, "00:00"
+        year, month, day = [int(part) for part in date_part.split("-")]
+        time_bits = time_part.split(":")
+        hour = int(time_bits[0])
+        minute = int(time_bits[1]) if len(time_bits) > 1 else 0
+        second = int(time_bits[2]) if len(time_bits) > 2 else 0
+        return int(time.mktime((year, month, day, hour, minute, second, 0, 0, -1)))
+    except (ValueError, OverflowError, TypeError, IndexError):
+        return None
+
+
+def parse_route_interval_filters(query):
+    start_raw = str(query.get("intervalStart", [""])[0]).strip()
+    end_raw = str(query.get("intervalEnd", [""])[0]).strip()
+    from_ts = parse_datetime_local(start_raw)
+    to_ts = parse_datetime_local(end_raw)
+    if from_ts is not None and to_ts is not None and from_ts > to_ts:
+        from_ts, to_ts = to_ts, from_ts
+    return from_ts, to_ts, start_raw, end_raw
+
+
 def render_history_date_range_widget():
     return """
       <div class="row g-2 align-items-end mt-3 pt-3 border-top">
@@ -1097,6 +1126,80 @@ def query_device_location_history(device_id, limit=SYNC_HISTORY_LIMIT, search=""
         }
         for row in rows
     ]
+
+
+def query_device_location_route(device_id, from_ts, to_ts, limit=5000):
+    if from_ts is None or to_ts is None:
+        return []
+    if from_ts > to_ts:
+        from_ts, to_ts = to_ts, from_ts
+    limit = max(2, min(int(limit or 5000), 10000))
+    with db_connect() as connection:
+        rows = connection.execute(
+            "SELECT id, latitude, longitude, accuracy, timestamp FROM device_location_history "
+            "WHERE device_id = ? AND timestamp >= ? AND timestamp <= ? "
+            "ORDER BY timestamp ASC LIMIT ?",
+            (device_id, from_ts, to_ts, limit),
+        ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "latitude": row["latitude"],
+            "longitude": row["longitude"],
+            "accuracy": row["accuracy"],
+            "timestamp": row["timestamp"],
+            "dateLabel": time.strftime("%Y-%m-%d", time.localtime(int(row["timestamp"]))),
+            "timeLabel": time.strftime("%H:%M:%S", time.localtime(int(row["timestamp"]))),
+            "updatedLabel": format_timestamp(row["timestamp"]),
+        }
+        for row in rows
+    ]
+
+
+def summarize_location_route(points):
+    if not points:
+        return {
+            "pointCount": 0,
+            "distanceMeters": 0,
+            "durationSeconds": 0,
+        }
+    distance = 0.0
+    for index in range(1, len(points)):
+        prev = points[index - 1]
+        current = points[index]
+        try:
+            distance += gf.haversine_meters(
+                float(prev["latitude"]),
+                float(prev["longitude"]),
+                float(current["latitude"]),
+                float(current["longitude"]),
+            )
+        except (TypeError, ValueError):
+            continue
+    duration = max(0, int(points[-1]["timestamp"]) - int(points[0]["timestamp"]))
+    return {
+        "pointCount": len(points),
+        "distanceMeters": round(distance, 1),
+        "durationSeconds": duration,
+    }
+
+
+def build_location_route_payload(device_id, from_ts, to_ts, start_label="", end_label=""):
+    points = query_device_location_route(device_id, from_ts, to_ts)
+    stats = summarize_location_route(points)
+    return {
+        "ok": True,
+        "deviceId": device_id,
+        "points": points,
+        "count": len(points),
+        "stats": stats,
+        "interval": {
+            "fromTs": from_ts,
+            "toTs": to_ts,
+            "startLabel": start_label or format_timestamp(from_ts),
+            "endLabel": end_label or format_timestamp(to_ts),
+        },
+    }
 
 
 def record_call_log_entries(device_id, entries):
@@ -2907,6 +3010,28 @@ class ApiHandler(BaseHTTPRequestHandler):
             )
             items = geocode.enrich_location_items_with_addresses(items, cache_only=True)
             self.send_json({"ok": True, "items": items, "count": len(items)})
+            return
+        if path == "/devices/location/history-view":
+            query = parse_qs(parsed_url.query)
+            device_id = str(query.get("deviceId", [""])[0]).strip()
+            device = get_device_by_id(device_id)
+            if not device:
+                self.send_html(render_not_found("Device not found"), status=404)
+                return
+            self.send_html(render_device_location_history_view(decorate_device(device)))
+            return
+        if path == "/devices/location/route.json":
+            query = parse_qs(parsed_url.query)
+            device_id = str(query.get("deviceId", [""])[0]).strip()
+            device = get_device_by_id(device_id)
+            if not device:
+                self.send_json({"error": "device_not_found"}, status=404)
+                return
+            from_ts, to_ts, start_label, end_label = parse_route_interval_filters(query)
+            if from_ts is None or to_ts is None:
+                self.send_json({"error": "interval_required"}, status=400)
+                return
+            self.send_json(build_location_route_payload(device_id, from_ts, to_ts, start_label, end_label))
             return
         if path == "/devices/location/geocode.json":
             query = parse_qs(parsed_url.query)
@@ -8171,6 +8296,7 @@ DEVICE_MENU_ITEMS = (
     ("geofence", "Geofence", "/devices/geofence"),
     ("wifi", "Wi-Fi Profile", "/devices/wifi-profile"),
     ("location", "Live Location Map", "/devices/location"),
+    ("location_history", "Live Map History View", "/devices/location/history-view"),
     ("call_log", "Call Log History", "/devices/call-log"),
     ("sms", "SMS History", "/devices/sms-history"),
     ("contacts", "Contact List", "/devices/contacts"),
@@ -8239,6 +8365,9 @@ def render_device_location_map(device):
         <div class="text-end">
           <div>{render_device_status_badge(device)}</div>
           <div class="small text-secondary mt-1" id="location-updated">Last update: {format_optional_timestamp(device.get("lastLocationAt"), "No location yet")}</div>
+          <div class="mt-2">
+            <a class="btn btn-sm btn-outline-primary" href="/devices/location/history-view?deviceId={device_id}">Live Map History View</a>
+          </div>
           <div class="mt-1">{render_page_refresh_controls("location-sync-status", "location-refresh-btn")}</div>
         </div>
       </div>
@@ -8708,6 +8837,351 @@ def render_device_location_map(device):
         content,
         active_path="/",
         page_title="Live Location Map",
+        extra_scripts=scripts,
+    )
+
+
+def render_device_location_history_view(device):
+    device_id = escape(device.get("deviceId"))
+    content = f"""
+    <div class="mb-3">{render_device_features_menu(device)}</div>
+    <section class="admin-card p-4 mb-4">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3">
+        <div>
+          <h2 class="h5 mb-1">Live Map History View</h2>
+          <div class="text-secondary device-id">{device_id} · {escape(device.get("manufacturer"))} {escape(device.get("model"))}</div>
+          <p class="small text-secondary mb-0 mt-2">
+            Pick a start and end date/time. The server loads stored coordinates between those moments and draws the route on the map.
+          </p>
+        </div>
+        <div class="text-end">
+          {render_device_status_badge(device)}
+          <div class="mt-2">
+            <a class="btn btn-sm btn-outline-secondary" href="/devices/location?deviceId={device_id}">Back to Live Location</a>
+          </div>
+        </div>
+      </div>
+      <div class="row g-3 align-items-end">
+        <div class="col-md-5">
+          <label class="form-label fw-bold small" for="interval-start">Interval start (date &amp; time)</label>
+          <input id="interval-start" class="form-control" type="datetime-local" step="60">
+        </div>
+        <div class="col-md-5">
+          <label class="form-label fw-bold small" for="interval-end">Interval end (date &amp; time)</label>
+          <input id="interval-end" class="form-control" type="datetime-local" step="60">
+        </div>
+        <div class="col-md-2 d-grid">
+          <button type="button" class="btn btn-primary" id="route-apply">Show route</button>
+        </div>
+      </div>
+      <div class="d-flex flex-wrap gap-2 align-items-center mt-3">
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="route-last-hour">Last 1 hour</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="route-last-day">Last 24 hours</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="route-clear">Clear</button>
+        <span class="small text-secondary" id="route-interval-note">Select an interval, then click Show route.</span>
+      </div>
+      <div class="row g-3 mt-2">
+        <div class="col-md-4">
+          <div class="border rounded p-3 bg-light">
+            <div class="small text-secondary">Points in interval</div>
+            <div class="fs-5 fw-bold" id="route-point-count">0</div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="border rounded p-3 bg-light">
+            <div class="small text-secondary">Route distance</div>
+            <div class="fs-5 fw-bold" id="route-distance">-</div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="border rounded p-3 bg-light">
+            <div class="small text-secondary">Time span</div>
+            <div class="fs-5 fw-bold" id="route-duration">-</div>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="admin-card clip-content overflow-hidden mb-4">
+      <div class="p-3 border-bottom d-flex justify-content-between align-items-center">
+        <h3 class="h6 text-uppercase text-secondary mb-0">Route map</h3>
+        <span class="small text-secondary" id="route-map-status">Waiting for interval</span>
+      </div>
+      <div id="route-history-map" style="height:520px;background:#dbeafe;"></div>
+    </section>
+    <section class="admin-card mb-4">
+      <div class="p-3 border-bottom">
+        <h3 class="h6 text-uppercase text-secondary mb-1">Coordinates in selected interval</h3>
+        <div class="small text-secondary">Ordered from start to end of the route</div>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Date</th>
+              <th>Time</th>
+              <th>Latitude</th>
+              <th>Longitude</th>
+              <th>Accuracy</th>
+            </tr>
+          </thead>
+          <tbody id="route-points-body">
+            <tr><td colspan="6" class="text-center text-secondary py-4">Select an interval and click Show route.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+    """
+    scripts = f"""
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <style>
+      #route-history-map .leaflet-control-layers {{
+        border-radius: 10px;
+        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.15);
+      }}
+    </style>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+      const deviceId = "{device_id}";
+      const map = L.map("route-history-map");
+      const streetLayer = L.tileLayer("https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png", {{
+        maxZoom: 19,
+        attribution: "&copy; OpenStreetMap contributors"
+      }});
+      const satelliteLayer = L.tileLayer(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}",
+        {{ maxZoom: 19, attribution: "Tiles &copy; Esri" }}
+      );
+      const satelliteLabelsLayer = L.tileLayer(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{{z}}/{{y}}/{{x}}",
+        {{ maxZoom: 19, opacity: 0.85, attribution: "Labels &copy; Esri" }}
+      );
+      const hybridLayer = L.layerGroup([satelliteLayer, satelliteLabelsLayer]);
+      streetLayer.addTo(map);
+      L.control.layers(
+        {{
+          "Street Map": streetLayer,
+          "Satellite": satelliteLayer,
+          "Satellite + Labels": hybridLayer
+        }},
+        null,
+        {{ position: "topright", collapsed: false }}
+      ).addTo(map);
+      map.setView([20.5937, 78.9629], 5);
+
+      let routeLine = null;
+      let startMarker = null;
+      let endMarker = null;
+      let waypointLayer = null;
+
+      function pad2(value) {{
+        return String(value).padStart(2, "0");
+      }}
+
+      function toDatetimeLocalValue(date) {{
+        return `${{date.getFullYear()}}-${{pad2(date.getMonth() + 1)}}-${{pad2(date.getDate())}}T${{pad2(date.getHours())}}:${{pad2(date.getMinutes())}}`;
+      }}
+
+      function setDefaultInterval() {{
+        const end = new Date();
+        const start = new Date(end.getTime() - 60 * 60 * 1000);
+        document.getElementById("interval-start").value = toDatetimeLocalValue(start);
+        document.getElementById("interval-end").value = toDatetimeLocalValue(end);
+        updateIntervalNote();
+      }}
+
+      function updateIntervalNote() {{
+        const start = document.getElementById("interval-start")?.value;
+        const end = document.getElementById("interval-end")?.value;
+        const note = document.getElementById("route-interval-note");
+        if (!note) return;
+        if (start && end) {{
+          note.textContent = `Showing route from ${{start.replace("T", " ")}} to ${{end.replace("T", " ")}}`;
+        }} else {{
+          note.textContent = "Select an interval, then click Show route.";
+        }}
+      }}
+
+      function formatDuration(seconds) {{
+        const total = Math.max(0, Number(seconds) || 0);
+        const hours = Math.floor(total / 3600);
+        const minutes = Math.floor((total % 3600) / 60);
+        const secs = total % 60;
+        if (hours > 0) return `${{hours}}h ${{minutes}}m`;
+        if (minutes > 0) return `${{minutes}}m ${{secs}}s`;
+        return `${{secs}}s`;
+      }}
+
+      function formatDistance(meters) {{
+        const value = Number(meters) || 0;
+        if (value >= 1000) return `${{(value / 1000).toFixed(2)}} km`;
+        return `${{value.toFixed(0)}} m`;
+      }}
+
+      function clearRouteLayers() {{
+        if (routeLine) {{ map.removeLayer(routeLine); routeLine = null; }}
+        if (startMarker) {{ map.removeLayer(startMarker); startMarker = null; }}
+        if (endMarker) {{ map.removeLayer(endMarker); endMarker = null; }}
+        if (waypointLayer) {{ map.removeLayer(waypointLayer); waypointLayer = null; }}
+      }}
+
+      function renderRouteTable(points) {{
+        const body = document.getElementById("route-points-body");
+        if (!body) return;
+        if (!points.length) {{
+          body.innerHTML = `<tr><td colspan="6" class="text-center text-secondary py-4">No coordinates found in this interval.</td></tr>`;
+          return;
+        }}
+        body.innerHTML = points.map((point, index) => {{
+          const lat = Number(point.latitude).toFixed(6);
+          const lng = Number(point.longitude).toFixed(6);
+          const accuracy = point.accuracy == null ? "-" : `${{Number(point.accuracy).toFixed(1)}} m`;
+          return `<tr>
+            <td>${{index + 1}}</td>
+            <td>${{escapeHtml(point.dateLabel || "-")}}</td>
+            <td>${{escapeHtml(point.timeLabel || "-")}}</td>
+            <td class="device-id">${{escapeHtml(lat)}}</td>
+            <td class="device-id">${{escapeHtml(lng)}}</td>
+            <td>${{escapeHtml(accuracy)}}</td>
+          </tr>`;
+        }}).join("");
+      }}
+
+      function drawRouteOnMap(points) {{
+        clearRouteLayers();
+        if (!points.length) {{
+          document.getElementById("route-map-status").textContent = "No route points in this interval";
+          map.setView([20.5937, 78.9629], 5);
+          return;
+        }}
+        const latLngs = points.map((point) => [Number(point.latitude), Number(point.longitude)]);
+        routeLine = L.polyline(latLngs, {{
+          color: "#1565c0",
+          weight: 5,
+          opacity: 0.9,
+          lineJoin: "round"
+        }}).addTo(map);
+
+        const start = latLngs[0];
+        const end = latLngs[latLngs.length - 1];
+        startMarker = L.circleMarker(start, {{
+          radius: 10,
+          color: "#1b5e20",
+          fillColor: "#66bb6a",
+          fillOpacity: 0.95,
+          weight: 2
+        }}).addTo(map).bindPopup(`Start<br>${{points[0].updatedLabel || ""}}`);
+        endMarker = L.circleMarker(end, {{
+          radius: 10,
+          color: "#b71c1c",
+          fillColor: "#ef5350",
+          fillOpacity: 0.95,
+          weight: 2
+        }}).addTo(map).bindPopup(`End<br>${{points[points.length - 1].updatedLabel || ""}}`);
+
+        waypointLayer = L.layerGroup(
+          points.slice(1, -1).map((point) => {{
+            const label = point.updatedLabel || `${{point.latitude}}, ${{point.longitude}}`;
+            return L.circleMarker([Number(point.latitude), Number(point.longitude)], {{
+              radius: 4,
+              color: "#1565c0",
+              fillColor: "#64b5f6",
+              fillOpacity: 0.85,
+              weight: 1
+            }}).bindPopup(label);
+          }})
+        ).addTo(map);
+
+        map.fitBounds(routeLine.getBounds(), {{ padding: [36, 36] }});
+        document.getElementById("route-map-status").textContent = `${{points.length}} points drawn on map`;
+      }}
+
+      function escapeHtml(value) {{
+        return String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;");
+      }}
+
+      async function loadRoute() {{
+        const start = document.getElementById("interval-start")?.value;
+        const end = document.getElementById("interval-end")?.value;
+        const status = document.getElementById("route-map-status");
+        if (!start || !end) {{
+          if (status) status.textContent = "Start and end date/time are required";
+          return;
+        }}
+        if (status) status.textContent = "Loading route from database...";
+        updateIntervalNote();
+        try {{
+          const params = new URLSearchParams();
+          params.set("deviceId", deviceId);
+          params.set("intervalStart", start);
+          params.set("intervalEnd", end);
+          const response = await fetch(`/devices/location/route.json?${{params.toString()}}`, {{ cache: "no-store" }});
+          const payload = await response.json().catch(() => ({{}}));
+          if (!response.ok) {{
+            if (status) status.textContent = payload.error || `Could not load route (${{response.status}})`;
+            clearRouteLayers();
+            renderRouteTable([]);
+            return;
+          }}
+          const points = payload.points || [];
+          const stats = payload.stats || {{}};
+          document.getElementById("route-point-count").textContent = String(stats.pointCount ?? points.length);
+          document.getElementById("route-distance").textContent = formatDistance(stats.distanceMeters);
+          document.getElementById("route-duration").textContent = formatDuration(stats.durationSeconds);
+          renderRouteTable(points);
+          drawRouteOnMap(points);
+        }} catch (error) {{
+          if (status) status.textContent = "Could not load route";
+          clearRouteLayers();
+        }}
+      }}
+
+      document.getElementById("route-apply")?.addEventListener("click", loadRoute);
+      document.getElementById("route-clear")?.addEventListener("click", () => {{
+        document.getElementById("interval-start").value = "";
+        document.getElementById("interval-end").value = "";
+        clearRouteLayers();
+        renderRouteTable([]);
+        document.getElementById("route-point-count").textContent = "0";
+        document.getElementById("route-distance").textContent = "-";
+        document.getElementById("route-duration").textContent = "-";
+        document.getElementById("route-map-status").textContent = "Waiting for interval";
+        updateIntervalNote();
+      }});
+      document.getElementById("route-last-hour")?.addEventListener("click", () => {{
+        const end = new Date();
+        const start = new Date(end.getTime() - 60 * 60 * 1000);
+        document.getElementById("interval-start").value = toDatetimeLocalValue(start);
+        document.getElementById("interval-end").value = toDatetimeLocalValue(end);
+        updateIntervalNote();
+        loadRoute();
+      }});
+      document.getElementById("route-last-day")?.addEventListener("click", () => {{
+        const end = new Date();
+        const start = new Date(end.getTime() - 24 * 60 * 60 * 1000);
+        document.getElementById("interval-start").value = toDatetimeLocalValue(start);
+        document.getElementById("interval-end").value = toDatetimeLocalValue(end);
+        updateIntervalNote();
+        loadRoute();
+      }});
+      ["interval-start", "interval-end"].forEach((id) => {{
+        document.getElementById(id)?.addEventListener("change", updateIntervalNote);
+      }});
+
+      setDefaultInterval();
+      loadRoute();
+    </script>
+    """
+    return render_admin_page(
+        "Live Map History View",
+        "Draw the device travel route between two date/time points using stored location history.",
+        content,
+        active_path="/",
+        page_title="Live Map History View",
         extra_scripts=scripts,
     )
 
