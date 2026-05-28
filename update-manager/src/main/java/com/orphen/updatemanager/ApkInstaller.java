@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageInstaller;
+import android.content.pm.PackageManager;
 import android.os.Build;
 import android.util.Log;
 
@@ -22,45 +23,71 @@ public final class ApkInstaller {
     public static final String EXTRA_PACKAGE_NAME = "package_name";
     public static final String EXTRA_TARGET_VERSION_CODE = "target_version_code";
 
+    public static final String[] MONITORED_PACKAGES = {
+            CatalogFetcher.TARGET_PACKAGE,
+            "com.example.devicesafety",
+    };
+
     private ApkInstaller() {
+    }
+
+    public static String resolveInstalledTargetPackage(Context context) {
+        for (String packageName : MONITORED_PACKAGES) {
+            if (isPackageInstalled(context, packageName)) {
+                return packageName;
+            }
+        }
+        return "";
     }
 
     public static boolean isPackageInstalled(Context context, String packageName) {
         if (packageName == null || packageName.length() == 0) {
             return false;
         }
-        try {
-            context.getPackageManager().getPackageInfo(packageName, 0);
-            return true;
-        } catch (Exception exception) {
-            return false;
-        }
+        return getPackageInfo(context, packageName) != null;
     }
 
     public static int readInstalledVersionCode(Context context, String packageName) {
-        if (!isPackageInstalled(context, packageName)) {
-            return 0;
-        }
-        try {
-            PackageInfo info = context.getPackageManager().getPackageInfo(packageName, 0);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                return (int) info.getLongVersionCode();
+        PackageInfo info = getPackageInfo(context, packageName);
+        if (info == null) {
+            int recorded = PrefsHelper.getRecordedInstallCode(context, packageName);
+            if (recorded > 0) {
+                Log.i(TAG, "Using recorded version code " + recorded + " for " + packageName);
+                return recorded;
             }
-            return info.versionCode;
-        } catch (Exception exception) {
             return 0;
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            return (int) info.getLongVersionCode();
+        }
+        return info.versionCode;
     }
 
     public static String readInstalledVersionName(Context context, String packageName) {
-        if (!isPackageInstalled(context, packageName)) {
+        PackageInfo info = getPackageInfo(context, packageName);
+        if (info == null) {
+            int recorded = PrefsHelper.getRecordedInstallCode(context, packageName);
+            if (recorded > 0) {
+                return "v? (code " + recorded + ")";
+            }
             return "";
         }
+        return info.versionName == null ? "" : info.versionName;
+    }
+
+    private static PackageInfo getPackageInfo(Context context, String packageName) {
+        PackageManager manager = context.getPackageManager();
         try {
-            PackageInfo info = context.getPackageManager().getPackageInfo(packageName, 0);
-            return info.versionName == null ? "" : info.versionName;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                return manager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0));
+            }
+            return manager.getPackageInfo(packageName, 0);
+        } catch (PackageManager.NameNotFoundException exception) {
+            Log.d(TAG, "Package not visible or missing: " + packageName);
+            return null;
         } catch (Exception exception) {
-            return "";
+            Log.w(TAG, "getPackageInfo failed for " + packageName + ": " + exception.getMessage());
+            return null;
         }
     }
 

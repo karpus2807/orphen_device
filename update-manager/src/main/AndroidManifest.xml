@@ -10,6 +10,12 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Required on Android 11+ to read installed version of Device Safety Manager -->
+    <queries>
+        <package android:name="com.orphen.devicesafety" />
+        <package android:name="com.example.devicesafety" />
+    </queries>
+
     <application
         android:allowBackup="false"
         android:icon="@android:drawable/stat_sys_download"

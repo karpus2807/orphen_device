@@ -273,11 +273,14 @@ public class MainActivity extends Activity {
     private void refreshVersionUi() {
         UpdateEngine.InstalledVersion installed = UpdateEngine.getInstalledVersion(getApplicationContext());
         if (installed.installed) {
+            String pkgNote = installed.packageName != null && installed.packageName.length() > 0
+                    ? " [" + installed.packageName + "]"
+                    : "";
             installedVersionView.setText(
-                    "Installed: " + installed.versionName + " (code " + installed.versionCode + ")"
+                    "Installed: " + installed.versionName + " (code " + installed.versionCode + ")" + pkgNote
             );
         } else {
-            installedVersionView.setText("Installed: Not installed");
+            installedVersionView.setText("Installed: Not detected (open Refresh after DSM is installed)");
         }
 
         SharedPreferences prefs = PrefsHelper.prefs(this);

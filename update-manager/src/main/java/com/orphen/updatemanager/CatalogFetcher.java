@@ -45,12 +45,25 @@ public final class CatalogFetcher {
             if (!TARGET_PACKAGE.equals(packageName)) {
                 continue;
             }
+            String versionName = item.optString("version", "");
+            if (versionName.length() == 0) {
+                versionName = item.optString("versionName", "");
+            }
+            int versionCode = item.optInt("versionCode", 0);
+            if (versionCode <= 0) {
+                versionCode = item.optInt("version_code", 0);
+            }
+            String apkUrl = item.optString("apkUrl", "");
+            if (apkUrl.length() == 0) {
+                apkUrl = item.optString("apk_url", "");
+            }
+            Log.i(TAG, "Catalog " + packageName + " → " + versionName + " (code " + versionCode + ")");
             return new CatalogInfo(
                     packageName,
                     item.optString("appLabel", "Orphen Device Safety"),
-                    item.optString("version", ""),
-                    item.optInt("versionCode", 0),
-                    item.optString("apkUrl", "")
+                    versionName,
+                    versionCode,
+                    apkUrl
             );
         }
         throw new Exception("Orphen Device Safety not in server catalog");

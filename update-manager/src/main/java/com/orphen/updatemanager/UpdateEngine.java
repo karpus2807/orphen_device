@@ -21,13 +21,15 @@ public final class UpdateEngine {
     }
 
     public static InstalledVersion getInstalledVersion(Context context) {
-        String packageName = CatalogFetcher.TARGET_PACKAGE;
-        if (!ApkInstaller.isPackageInstalled(context, packageName)) {
+        String packageName = ApkInstaller.resolveInstalledTargetPackage(context);
+        if (packageName == null || packageName.length() == 0) {
+            Log.i(TAG, "No monitored app package found on device");
             return new InstalledVersion(false, 0, "");
         }
         int code = ApkInstaller.readInstalledVersionCode(context, packageName);
         String name = ApkInstaller.readInstalledVersionName(context, packageName);
-        return new InstalledVersion(true, code, name);
+        Log.i(TAG, "Installed " + packageName + " → " + name + " (code " + code + ")");
+        return new InstalledVersion(true, code, name, packageName);
     }
 
     public static boolean isUpdateNeeded(Context context, CatalogInfo catalog) {
@@ -68,7 +70,12 @@ public final class UpdateEngine {
         if (catalog != null && catalog.appLabel != null && catalog.appLabel.length() > 0) {
             summary.append(catalog.appLabel).append("\n");
         }
-        summary.append("Package: ").append(CatalogFetcher.TARGET_PACKAGE).append("\n\n");
+        summary.append("Package: ").append(CatalogFetcher.TARGET_PACKAGE).append("\n");
+        if (installed.installed && installed.packageName != null && installed.packageName.length() > 0) {
+            summary.append("Detected: ").append(installed.packageName).append("\n\n");
+        } else {
+            summary.append("\n");
+        }
         if (installed.installed) {
             summary.append("Installed: ")
                     .append(installed.versionName)
@@ -171,11 +178,17 @@ public final class UpdateEngine {
         public final boolean installed;
         public final int versionCode;
         public final String versionName;
+        public final String packageName;
 
         InstalledVersion(boolean installed, int versionCode, String versionName) {
+            this(installed, versionCode, versionName, "");
+        }
+
+        InstalledVersion(boolean installed, int versionCode, String versionName, String packageName) {
             this.installed = installed;
             this.versionCode = versionCode;
             this.versionName = versionName == null ? "" : versionName;
+            this.packageName = packageName == null ? "" : packageName;
         }
     }
 }
