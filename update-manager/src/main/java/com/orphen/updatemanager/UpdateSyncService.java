@@ -143,12 +143,17 @@ public class UpdateSyncService extends Service {
         }
         boolean installed = ApkInstaller.isPackageInstalled(this, packageName);
         int installedCode = installed ? ApkInstaller.readInstalledVersionCode(this, packageName) : 0;
-        boolean missing = !installed;
-        boolean outdated = installed && installedCode > 0 && installedCode < targetCode;
+        int recordedCode = PrefsHelper.getRecordedInstallCode(this, packageName);
+        int effectiveCode = Math.max(installedCode, recordedCode);
+        boolean missing = !installed && recordedCode <= 0;
+        boolean outdated = effectiveCode > 0 && effectiveCode < targetCode;
         if (missing && !installIfMissing) {
             return true;
         }
         if (!missing && !outdated) {
+            return false;
+        }
+        if (installed && installedCode >= targetCode) {
             return false;
         }
         if (missing) {
@@ -158,7 +163,7 @@ public class UpdateSyncService extends Service {
             updateNotification("Updating " + appLabel);
         }
         File apk = ApkInstaller.downloadApk(this, apkUrl, packageName, targetCode);
-        ApkInstaller.installApk(this, apk, packageName);
+        ApkInstaller.installApk(this, apk, packageName, targetCode);
         return missing;
     }
 

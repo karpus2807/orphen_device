@@ -8,6 +8,7 @@ import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Environment;
 
 public final class AppUpdateHelper {
@@ -18,12 +19,27 @@ public final class AppUpdateHelper {
         String version = BackendClient.extractJsonValue(payload, "version").trim();
         String apkUrl = BackendClient.extractJsonValue(payload, "apkUrl").trim();
         String releaseNotes = BackendClient.extractJsonValue(payload, "releaseNotes").trim();
+        String versionCodeRaw = BackendClient.extractJsonValue(payload, "versionCode").trim();
         if (apkUrl.length() == 0) {
             throw new Exception("APK URL is missing");
         }
 
-        String currentVersion = readAppVersion(context);
-        if (version.length() > 0 && version.equals(currentVersion)) {
+        int targetCode = 0;
+        try {
+            if (versionCodeRaw.length() > 0) {
+                targetCode = Integer.parseInt(versionCodeRaw);
+            }
+        } catch (NumberFormatException ignored) {
+            targetCode = 0;
+        }
+
+        int installedCode = readInstalledVersionCode(context);
+        String currentVersion = readAppVersionName(context);
+
+        if (targetCode > 0 && installedCode >= targetCode) {
+            return "Device already has version code " + installedCode + " (target " + targetCode + ")";
+        }
+        if (targetCode <= 0 && version.length() > 0 && version.equals(currentVersion)) {
             return "Device already has version " + version;
         }
 
@@ -81,7 +97,19 @@ public final class AppUpdateHelper {
         context.startActivity(intent);
     }
 
-    private static String readAppVersion(Context context) {
+    private static int readInstalledVersionCode(Context context) {
+        try {
+            PackageInfo info = context.getPackageManager().getPackageInfo(context.getPackageName(), 0);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                return (int) info.getLongVersionCode();
+            }
+            return info.versionCode;
+        } catch (PackageManager.NameNotFoundException exception) {
+            return 0;
+        }
+    }
+
+    private static String readAppVersionName(Context context) {
         try {
             PackageInfo info = context.getPackageManager().getPackageInfo(context.getPackageName(), 0);
             return info.versionName == null ? "" : info.versionName;

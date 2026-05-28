@@ -20,6 +20,7 @@ public final class ApkInstaller {
     private static final String TAG = "ApkInstaller";
     public static final String EXTRA_APK_PATH = "apk_path";
     public static final String EXTRA_PACKAGE_NAME = "package_name";
+    public static final String EXTRA_TARGET_VERSION_CODE = "target_version_code";
 
     private ApkInstaller() {
     }
@@ -82,7 +83,7 @@ public final class ApkInstaller {
         return out;
     }
 
-    public static void installApk(Context context, File apkFile, String packageName) throws Exception {
+    public static void installApk(Context context, File apkFile, String packageName, int targetVersionCode) throws Exception {
         PackageInstaller installer = context.getPackageManager().getPackageInstaller();
         PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(
                 PackageInstaller.SessionParams.MODE_FULL_INSTALL
@@ -103,6 +104,7 @@ public final class ApkInstaller {
             Intent callback = new Intent(context, InstallResultReceiver.class);
             callback.putExtra(EXTRA_APK_PATH, apkFile.getAbsolutePath());
             callback.putExtra(EXTRA_PACKAGE_NAME, packageName);
+            callback.putExtra(EXTRA_TARGET_VERSION_CODE, targetVersionCode);
             int flags = PendingIntent.FLAG_UPDATE_CURRENT;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 flags |= PendingIntent.FLAG_MUTABLE;

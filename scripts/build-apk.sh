@@ -15,14 +15,23 @@ if [[ ! -x "${BT}/aapt2" ]]; then
 fi
 
 cd "${ROOT}"
+VERSION_CODE="1"
+VERSION_NAME="1.0.0"
+if [[ -f app/version.properties ]]; then
+  VERSION_CODE="$(grep -E '^versionCode=' app/version.properties | cut -d= -f2- | tr -d ' \r' || echo 1)"
+  VERSION_NAME="$(grep -E '^versionName=' app/version.properties | cut -d= -f2- | tr -d ' \r' || echo 1.0.0)"
+fi
+
 rm -rf build/compiled build/gen build/classes build/dex build/unsigned.apk
 mkdir -p build/compiled build/gen build/classes build/dex
 
-echo "Compiling resources..."
+echo "Compiling resources (v${VERSION_NAME} / ${VERSION_CODE})..."
 "${BT}/aapt2" compile --dir app/src/main/res -o build/compiled/resources.zip
 "${BT}/aapt2" link \
   -I "${PLATFORM}" \
   --manifest app/src/main/AndroidManifest.xml \
+  --version-code "${VERSION_CODE}" \
+  --version-name "${VERSION_NAME}" \
   --java build/gen \
   -o "${UNSIGNED}" \
   build/compiled/resources.zip

@@ -20,6 +20,10 @@ public class InstallResultReceiver extends BroadcastReceiver {
         int status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE);
         String message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
         if (status == PackageInstaller.STATUS_SUCCESS) {
+            int targetCode = intent.getIntExtra(ApkInstaller.EXTRA_TARGET_VERSION_CODE, 0);
+            if (packageName != null && packageName.length() > 0 && targetCode > 0) {
+                PrefsHelper.recordSuccessfulInstall(context, packageName, targetCode);
+            }
             ApkInstaller.deleteDownloadedApks(apkPath, packageName, context);
             Toast.makeText(context, "Update installed. Downloaded APK removed.", Toast.LENGTH_LONG).show();
             UpdateSyncService.start(context);
