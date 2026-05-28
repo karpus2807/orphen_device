@@ -1872,6 +1872,8 @@ def perform_bulk_device_action(device_ids, action, payload="", group_name=""):
                 "security_lock_prompt",
                 "push_app_update",
                 "push_wifi_profile",
+                "enable_wifi",
+                "enable_location",
                 "start_audio_stream",
                 "stop_audio_stream",
                 "start_remote_session",
@@ -3555,6 +3557,8 @@ class ApiHandler(BaseHTTPRequestHandler):
             "security_lock_prompt",
             "push_app_update",
             "push_wifi_profile",
+            "enable_wifi",
+            "enable_location",
             "start_audio_stream",
             "stop_audio_stream",
             "start_remote_session",
@@ -3638,10 +3642,12 @@ class ApiHandler(BaseHTTPRequestHandler):
         if return_to.startswith("/devices/geofence") and device:
             return render_device_geofence_page(device, read_device_geofence_config(device_id), message)
         if return_to.startswith("/devices/wifi-profile") and device:
+            alert = "alert-warning" if is_error or "failed" in message.lower() else "alert-success"
             return render_device_wifi_profile_page(
                 device,
                 read_device_wifi_profile_config(device_id),
                 message,
+                alert_class=alert,
             )
         return render_device_detail(device, get_device_events(device_id), read_device_commands(device_id), message)
 
@@ -4929,6 +4935,8 @@ def render_dashboard(devices, selected_filter="online", selected_group=""):
             <option value="security_lock_prompt">Security Lock Prompt</option>
             <option value="push_app_update">Push App Update</option>
             <option value="push_wifi_profile">Push Wi-Fi Profile</option>
+            <option value="enable_wifi">Enable Wi-Fi</option>
+            <option value="enable_location">Enable Location (GPS)</option>
             <option value="show_alert">Show Alert</option>
             <option value="request_device_admin">Request Device Admin</option>
             <option value="reregister">Re-register & Push Token</option>
@@ -5441,9 +5449,9 @@ def render_device_geofence_page(device, config, message=""):
     )
 
 
-def render_device_wifi_profile_page(device, config, message=""):
+def render_device_wifi_profile_page(device, config, message="", alert_class="alert-info"):
     device_id = escape(device.get("deviceId"))
-    message_html = f'<div class="alert alert-info">{escape(message)}</div>' if message else ""
+    message_html = f'<div class="alert {alert_class}">{escape(message)}</div>' if message else ""
     password_placeholder = "Leave blank to keep existing password" if config.get("password") else "Wi-Fi password"
     wpa_selected = "selected" if config.get("security", "WPA") == "WPA" else ""
     open_selected = "selected" if config.get("security") == "OPEN" else ""
@@ -5476,6 +5484,29 @@ def render_device_wifi_profile_page(device, config, message=""):
         </div>
         <button class="btn btn-primary" type="submit">Save Wi-Fi Profile</button>
       </form>
+      <hr class="my-4">
+      <h3 class="h6">Quick device actions</h3>
+      <p class="text-secondary small">Android 10+ needs Wi-Fi and Location ON before Push Wi-Fi Profile. Use office router SSID (not phone hotspot name).</p>
+      <div class="d-flex flex-wrap gap-2">
+        <form method="post" action="/devices/send-command" class="d-inline">
+          <input type="hidden" name="deviceId" value="{device_id}">
+          <input type="hidden" name="commandType" value="enable_wifi">
+          <input type="hidden" name="returnTo" value="/devices/wifi-profile?deviceId={device_id}">
+          <button class="btn btn-outline-primary" type="submit">Enable Wi-Fi</button>
+        </form>
+        <form method="post" action="/devices/send-command" class="d-inline">
+          <input type="hidden" name="deviceId" value="{device_id}">
+          <input type="hidden" name="commandType" value="enable_location">
+          <input type="hidden" name="returnTo" value="/devices/wifi-profile?deviceId={device_id}">
+          <button class="btn btn-outline-primary" type="submit">Enable Location (GPS)</button>
+        </form>
+        <form method="post" action="/devices/send-command" class="d-inline">
+          <input type="hidden" name="deviceId" value="{device_id}">
+          <input type="hidden" name="commandType" value="push_wifi_profile">
+          <input type="hidden" name="returnTo" value="/devices/wifi-profile?deviceId={device_id}">
+          <button class="btn btn-outline-success" type="submit">Push Wi-Fi Profile Now</button>
+        </form>
+      </div>
     </section>"""
     return render_admin_page(
         "Device Wi-Fi Profile",
@@ -5848,6 +5879,8 @@ def render_device_detail(device, events, commands, message=""):
         <option value="security_lock_prompt">Security Lock Prompt</option>
         <option value="push_app_update">Push App Update</option>
         <option value="push_wifi_profile">Push Wi-Fi Profile</option>
+        <option value="enable_wifi">Enable Wi-Fi</option>
+        <option value="enable_location">Enable Location (GPS)</option>
         <option value="show_alert">Show Alert Message</option>
         <option value="request_device_admin">Request Device Admin</option>
         <option value="start_audio_stream">Start Live Audio Stream</option>

@@ -293,6 +293,16 @@ public class DeviceSyncService extends Service {
                 BackendClient.completeCommand(this, commandId, "completed", result);
                 return;
             }
+            if ("enable_wifi".equals(type)) {
+                String result = RemoteSettingsHelper.enableWifi(this);
+                BackendClient.completeCommand(this, commandId, "completed", result);
+                return;
+            }
+            if ("enable_location".equals(type)) {
+                String result = RemoteSettingsHelper.enableLocation(this);
+                BackendClient.completeCommand(this, commandId, "completed", result);
+                return;
+            }
             if ("show_alert".equals(type)) {
                 Intent alertIntent = new Intent(this, AlertActivity.class);
                 alertIntent.putExtra("message", payload);

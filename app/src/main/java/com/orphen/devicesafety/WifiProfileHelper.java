@@ -22,6 +22,16 @@ public final class WifiProfileHelper {
             throw new Exception("Wi-Fi SSID is required");
         }
 
+        String prerequisite = RemoteSettingsHelper.wifiConnectPrerequisiteMessage(context);
+        if (prerequisite.length() > 0) {
+            throw new Exception(prerequisite);
+        }
+
+        try {
+            RemoteSettingsHelper.enableWifi(context);
+        } catch (Exception ignored) {
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             WifiNetworkSpecifier.Builder builder = new WifiNetworkSpecifier.Builder().setSsid(ssid);
             if (!"OPEN".equalsIgnoreCase(security)) {
@@ -42,8 +52,20 @@ public final class WifiProfileHelper {
                 @Override
                 public void onAvailable(Network network) {
                 }
+
+                @Override
+                public void onUnavailable() {
+                }
             });
-            return "Wi-Fi connection requested for " + ssid + ". Confirm the system prompt on the device.";
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                try {
+                    Intent panel = new Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY);
+                    panel.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    context.startActivity(panel);
+                } catch (Exception ignored) {
+                }
+            }
+            return "Connecting to " + ssid + " — confirm the system Wi-Fi prompt on the device.";
         }
 
         Intent panelIntent = new Intent(Settings.Panel.ACTION_WIFI);
