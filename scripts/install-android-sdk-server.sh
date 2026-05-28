@@ -12,7 +12,7 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq openjdk-17-jdk-headless unzip curl ca-certificates
+apt-get install -y -qq openjdk-17-jdk-headless unzip zip curl ca-certificates
 
 if [[ ! -d "${SDK_ROOT}/cmdline-tools/latest/bin" ]]; then
   mkdir -p "${SDK_ROOT}/cmdline-tools"
