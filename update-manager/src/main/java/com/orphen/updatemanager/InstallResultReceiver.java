@@ -26,6 +26,13 @@ public class InstallResultReceiver extends BroadcastReceiver {
             }
             ApkInstaller.deleteDownloadedApks(apkPath, packageName, context);
             Toast.makeText(context, "Update installed. Downloaded APK removed.", Toast.LENGTH_LONG).show();
+            try {
+                CatalogInfo catalog = CatalogFetcher.fetchTargetRelease(context);
+                UpdateEngine.saveCatalogSnapshot(context, catalog, false);
+            } catch (Exception ignored) {
+                PrefsHelper.prefs(context).edit().putBoolean(PrefsHelper.KEY_UPDATE_AVAILABLE, false).apply();
+            }
+            UpdateEngine.broadcastState(context, "Update installed successfully");
             UpdateSyncService.start(context);
             return;
         }

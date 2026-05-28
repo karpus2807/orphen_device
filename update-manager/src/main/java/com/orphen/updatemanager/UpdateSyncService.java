@@ -3,8 +3,8 @@ package com.orphen.updatemanager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.Service;
-import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
 import android.os.Handler;
@@ -12,27 +12,18 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.util.Log;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
-
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.URL;
-
 public class UpdateSyncService extends Service {
-    public static final String ACTION_SYNC_NOW = "com.orphen.updatemanager.SYNC_NOW";
+    public static final String ACTION_START = "com.orphen.updatemanager.START_WATCH";
     private static final String TAG = "UpdateSyncService";
-    private static final String TARGET_DSM = "com.orphen.devicesafety";
-    private static final long POLL_MS = 90_000L;
-    private static final long POLL_MS_MISSING = 30_000L;
+    private static final long POLL_MS = 10_000L;
+    private static final int FG_ID = 7101;
+    private static final int UPDATE_NOTIFY_ID = 7102;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private Runnable pollRunnable;
 
-    public static void start(Context context) {
+    public static void start(android.content.Context context) {
         Intent intent = new Intent(context, UpdateSyncService.class);
-        intent.setAction(ACTION_SYNC_NOW);
+        intent.setAction(ACTION_START);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(intent);
         } else {
@@ -43,22 +34,22 @@ public class UpdateSyncService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
-        startForeground(7101, buildNotification("Checking for updates"));
+        ensureChannels();
+        startForeground(FG_ID, buildWatchNotification("Watching for updates"));
         pollRunnable = new Runnable() {
             @Override
             public void run() {
-                boolean anyMissing = pollAndInstall();
-                long delay = anyMissing ? POLL_MS_MISSING : POLL_MS;
-                handler.postDelayed(this, delay);
+                checkCatalogOnly();
+                handler.postDelayed(this, POLL_MS);
             }
         };
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        PrefsHelper.ensureDefaults(this);
         handler.removeCallbacks(pollRunnable);
-        pollAndInstall();
-        handler.postDelayed(pollRunnable, POLL_MS_MISSING);
+        handler.post(pollRunnable);
         return START_STICKY;
     }
 
@@ -73,115 +64,90 @@ public class UpdateSyncService extends Service {
         super.onDestroy();
     }
 
-    /** @return true if a catalog app is not installed on the device */
-    private boolean pollAndInstall() {
-        final boolean[] anyMissing = {false};
-        Thread worker = new Thread(new Runnable() {
+    private void checkCatalogOnly() {
+        new Thread(new Runnable() {
             @Override
             public void run() {
                 try {
-                    String base = PrefsHelper.getServerBaseUrl(UpdateSyncService.this);
-                    URL url = new URL(base + "/api/update-manager/catalog");
-                    HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-                    connection.setConnectTimeout(20_000);
-                    connection.setReadTimeout(20_000);
-                    connection.connect();
-                    BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
-                    StringBuilder body = new StringBuilder();
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        body.append(line);
-                    }
-                    reader.close();
-                    connection.disconnect();
-                    JSONObject json = new JSONObject(body.toString());
-                    JSONArray releases = json.optJSONArray("releases");
-                    if (releases == null || releases.length() == 0) {
-                        updateNotification("No releases on server catalog");
-                        return;
-                    }
-                    for (int i = 0; i < releases.length(); i++) {
-                        JSONObject item = releases.getJSONObject(i);
-                        if (processRelease(item)) {
-                            anyMissing[0] = true;
-                        }
-                    }
-                    if (!ApkInstaller.isPackageInstalled(UpdateSyncService.this, TARGET_DSM)) {
-                        anyMissing[0] = true;
-                    }
-                    if (anyMissing[0]) {
-                        updateNotification("Waiting for installs — rechecking soon");
+                    CatalogInfo catalog = CatalogFetcher.fetchTargetRelease(UpdateSyncService.this);
+                    boolean needed = UpdateEngine.isUpdateNeeded(UpdateSyncService.this, catalog);
+                    UpdateEngine.saveCatalogSnapshot(UpdateSyncService.this, catalog, needed);
+                    if (needed) {
+                        showUpdateAvailableNotification(catalog);
+                        sendBroadcast(new Intent(UpdateEngine.ACTION_UPDATE_AVAILABLE).setPackage(getPackageName()));
                     } else {
-                        updateNotification("All apps up to date");
+                        cancelUpdateNotification();
+                        UpdateEngine.broadcastState(UpdateSyncService.this, "Up to date");
                     }
                 } catch (Exception exception) {
-                    Log.w(TAG, "poll failed: " + exception.getMessage());
-                    updateNotification("Update check failed: " + exception.getMessage());
+                    Log.w(TAG, "catalog check: " + exception.getMessage());
+                    UpdateEngine.broadcastState(UpdateSyncService.this, "Check failed: " + exception.getMessage());
                 }
             }
-        });
-        worker.start();
-        try {
-            worker.join(120_000);
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-        }
-        return anyMissing[0];
+        }).start();
     }
 
-    /**
-     * @return true if this package is missing from the device
-     */
-    private boolean processRelease(JSONObject item) throws Exception {
-        String packageName = item.optString("packageName", "");
-        String apkUrl = item.optString("apkUrl", "");
-        String appLabel = item.optString("appLabel", packageName);
-        int targetCode = item.optInt("versionCode", 0);
-        boolean installIfMissing = item.optBoolean("installIfMissing", true);
-        if (packageName.length() == 0 || apkUrl.length() == 0 || targetCode <= 0) {
-            return false;
+    private void showUpdateAvailableNotification(CatalogInfo catalog) {
+        Intent action = new Intent(this, UpdateActionReceiver.class);
+        action.setAction(UpdateActionReceiver.ACTION_RUN_UPDATE);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            flags |= PendingIntent.FLAG_MUTABLE;
         }
-        boolean installed = ApkInstaller.isPackageInstalled(this, packageName);
-        int installedCode = installed ? ApkInstaller.readInstalledVersionCode(this, packageName) : 0;
-        int recordedCode = PrefsHelper.getRecordedInstallCode(this, packageName);
-        int effectiveCode = Math.max(installedCode, recordedCode);
-        boolean missing = !installed && recordedCode <= 0;
-        boolean outdated = effectiveCode > 0 && effectiveCode < targetCode;
-        if (missing && !installIfMissing) {
-            return true;
-        }
-        if (!missing && !outdated) {
-            return false;
-        }
-        if (installed && installedCode >= targetCode) {
-            return false;
-        }
-        if (missing) {
-            updateNotification("Not installed — installing " + appLabel);
-            Log.i(TAG, "Fresh install: " + packageName + " v" + targetCode);
-        } else {
-            updateNotification("Updating " + appLabel);
-        }
-        File apk = ApkInstaller.downloadApk(this, apkUrl, packageName, targetCode);
-        ApkInstaller.installApk(this, apk, packageName, targetCode);
-        return missing;
-    }
+        PendingIntent updatePending = PendingIntent.getBroadcast(this, 42, action, flags);
 
-    private void updateNotification(String text) {
+        Intent openApp = new Intent(this, MainActivity.class);
+        openApp.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent openPending = PendingIntent.getActivity(this, 43, openApp, PendingIntent.FLAG_UPDATE_CURRENT);
+
+        UpdateEngine.InstalledVersion installed = UpdateEngine.getInstalledVersion(this);
+        String installedText = installed.installed
+                ? installed.versionName + " (" + installed.versionCode + ")"
+                : "Not installed";
+        String body = "Installed: " + installedText + " → Server: " + catalog.versionName + " (" + catalog.versionCode + ")";
+
+        Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                ? new Notification.Builder(this, "update_alert")
+                : new Notification.Builder(this);
+        builder.setContentTitle("Update available")
+                .setContentText(body)
+                .setStyle(new Notification.BigTextStyle().bigText(body))
+                .setSmallIcon(android.R.drawable.stat_sys_download)
+                .setContentIntent(openPending)
+                .setAutoCancel(true)
+                .addAction(android.R.drawable.ic_menu_upload, "Update", updatePending);
+
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null) {
-            manager.notify(7101, buildNotification(text));
+            manager.notify(UPDATE_NOTIFY_ID, builder.build());
         }
     }
 
-    private Notification buildNotification(String text) {
-        String channelId = "update_manager";
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(channelId, "APK Installer", NotificationManager.IMPORTANCE_LOW);
-            getSystemService(NotificationManager.class).createNotificationChannel(channel);
+    private void cancelUpdateNotification() {
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager != null) {
+            manager.cancel(UPDATE_NOTIFY_ID);
         }
+    }
+
+    private void ensureChannels() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return;
+        }
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager == null) {
+            return;
+        }
+        NotificationChannel watch = new NotificationChannel("update_watch", "Update watch", NotificationManager.IMPORTANCE_MIN);
+        watch.setShowBadge(false);
+        manager.createNotificationChannel(watch);
+        NotificationChannel alert = new NotificationChannel("update_alert", "Update alerts", NotificationManager.IMPORTANCE_DEFAULT);
+        manager.createNotificationChannel(alert);
+    }
+
+    private Notification buildWatchNotification(String text) {
         Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                ? new Notification.Builder(this, channelId)
+                ? new Notification.Builder(this, "update_watch")
                 : new Notification.Builder(this);
         return builder.setContentTitle("Orphen APK Installer")
                 .setContentText(text)

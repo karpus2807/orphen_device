@@ -5,6 +5,9 @@ import android.content.SharedPreferences;
 
 public final class PrefsHelper {
     private static final String NAME = "update_manager";
+    public static final String KEY_SERVER_VERSION_NAME = "server_version_name";
+    public static final String KEY_SERVER_VERSION_CODE = "server_version_code";
+    public static final String KEY_UPDATE_AVAILABLE = "update_available";
 
     private PrefsHelper() {
     }
@@ -13,10 +16,21 @@ public final class PrefsHelper {
         return context.getApplicationContext().getSharedPreferences(NAME, Context.MODE_PRIVATE);
     }
 
+    public static void ensureDefaults(Context context) {
+        SharedPreferences prefs = prefs(context);
+        if (prefs.getString("serverHost", "").length() == 0) {
+            prefs.edit()
+                    .putString("serverHost", "ipserver.in")
+                    .putString("serverPort", "9030")
+                    .apply();
+        }
+    }
+
     public static void recordSuccessfulInstall(Context context, String packageName, int versionCode) {
         prefs(context).edit()
                 .putInt(installKey(packageName), versionCode)
                 .putLong(installTimeKey(packageName), System.currentTimeMillis())
+                .putBoolean(KEY_UPDATE_AVAILABLE, false)
                 .apply();
     }
 
@@ -33,7 +47,8 @@ public final class PrefsHelper {
     }
 
     public static String getServerBaseUrl(Context context) {
-        String host = prefs(context).getString("serverHost", "127.0.0.1").trim();
+        ensureDefaults(context);
+        String host = prefs(context).getString("serverHost", "ipserver.in").trim();
         String port = prefs(context).getString("serverPort", "9030").trim();
         if (host.contains("://")) {
             return host.endsWith("/") ? host.substring(0, host.length() - 1) : host;

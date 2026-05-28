@@ -52,6 +52,18 @@ public final class ApkInstaller {
         }
     }
 
+    public static String readInstalledVersionName(Context context, String packageName) {
+        if (!isPackageInstalled(context, packageName)) {
+            return "";
+        }
+        try {
+            PackageInfo info = context.getPackageManager().getPackageInfo(packageName, 0);
+            return info.versionName == null ? "" : info.versionName;
+        } catch (Exception exception) {
+            return "";
+        }
+    }
+
     public static File downloadApk(Context context, String apkUrl, String packageName, int versionCode) throws Exception {
         File dir = new File(context.getExternalFilesDir("updates"), packageName);
         if (!dir.exists() && !dir.mkdirs()) {

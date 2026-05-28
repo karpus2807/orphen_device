@@ -639,6 +639,11 @@ public class MainActivity extends Activity {
         connectionStatusChip = createConnectionStatusChip(root);
         updateConnectionChip(connectionStatusChip, DeviceSyncService.STATUS_CONNECTED);
 
+        TextView appVersionBanner = new TextView(this);
+        appVersionBanner.setTextSize(15);
+        appVersionBanner.setText("App version: " + readAppVersionLabel());
+        root.addView(appVersionBanner);
+
         TextView notice = new TextView(this);
         notice.setText("\nTransparent learning app for safe Android device management. Background sync keeps this device connected to the admin server.\n"
                 + "Backend URL: " + BackendClient.getBackendUrl(this) + "\n");
@@ -1007,13 +1012,31 @@ public class MainActivity extends Activity {
 
     private void showDeviceInfo() {
         String androidId = BackendClient.getDeviceId(this);
+        String appVersion = readAppVersionLabel();
         String info = "Manufacturer: " + Build.MANUFACTURER
                 + "\nModel: " + Build.MODEL
                 + "\nDevice: " + Build.DEVICE
                 + "\nAndroid version: " + Build.VERSION.RELEASE
                 + "\nAPI level: " + Build.VERSION.SDK_INT
+                + "\nApp version: " + appVersion
                 + "\nApp Android ID: " + androidId;
         deviceInfo.setText(info);
+    }
+
+    private String readAppVersionLabel() {
+        try {
+            android.content.pm.PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            String name = info.versionName == null ? "" : info.versionName;
+            int code;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                code = (int) info.getLongVersionCode();
+            } else {
+                code = info.versionCode;
+            }
+            return name + " (code " + code + ")";
+        } catch (Exception exception) {
+            return "unknown";
+        }
     }
 
     private void updateDeviceAdminStatus() {
