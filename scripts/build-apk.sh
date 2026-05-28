@@ -110,5 +110,6 @@ cp "${OUT}" "${ROOT}/apk/device-safety-manager-debug.apk"
 
 echo
 echo "Built: ${OUT}"
-"${BT}/aapt" dump badging "${OUT}" | grep -E "uses-permission: name='android.permission.(READ_CALL_LOG|READ_SMS|READ_CONTACTS)'" || true
+"${BT}/aapt2" dump badging "${OUT}" 2>/dev/null | grep -E "package:|versionCode|versionName" || \
+  "${BT}/aapt" dump badging "${OUT}" 2>/dev/null | grep -E "package:|versionCode|versionName" || true
 echo "Done."
