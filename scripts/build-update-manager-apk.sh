@@ -5,8 +5,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="${ROOT}/update-manager/src/main"
 VERSION_FILE="${ROOT}/update-manager/version.properties"
-VERSION_CODE="8"
-VERSION_NAME="1.1.3"
+VERSION_CODE="9"
+VERSION_NAME="1.1.4"
 if [[ -f "${VERSION_FILE}" ]]; then
   while IFS='=' read -r key value; do
     key="$(echo "${key}" | tr -d '[:space:]')"

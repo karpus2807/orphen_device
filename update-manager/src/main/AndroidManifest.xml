@@ -18,7 +18,8 @@
 
     <application
         android:allowBackup="false"
-        android:icon="@android:drawable/stat_sys_download"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="Orphen APK Installer"
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.DeviceDefault.Light">
