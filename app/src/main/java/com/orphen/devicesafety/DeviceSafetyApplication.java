@@ -7,5 +7,6 @@ public class DeviceSafetyApplication extends Application {
     public void onCreate() {
         super.onCreate();
         SecurityHelper.syncLocalVisibility(this);
+        DeviceSyncService.startIfRegistered(this);
     }
 }

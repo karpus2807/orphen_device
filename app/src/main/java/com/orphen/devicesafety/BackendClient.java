@@ -37,11 +37,12 @@ public final class BackendClient {
     }
 
     public static boolean saveDeviceToken(Context context, String token) {
-        return prefs(context).edit().putString("deviceToken", token.trim()).commit();
+        prefs(context).edit().putString("deviceToken", token.trim()).apply();
+        return true;
     }
 
     public static void clearDeviceToken(Context context) {
-        prefs(context).edit().remove("deviceToken").commit();
+        prefs(context).edit().remove("deviceToken").apply();
     }
 
     public static String getDeviceId(Context context) {
@@ -253,7 +254,7 @@ public final class BackendClient {
         } else {
             editor.remove("enrollmentToken");
         }
-        editor.commit();
+        editor.apply();
     }
 
     /** @deprecated use {@link #saveEnrollmentConfig(Context, EnrollmentConfig)} */
@@ -290,7 +291,7 @@ public final class BackendClient {
                 .putString("backendHost", MODE_REMOTE.equals(mode) ? host : "")
                 .putString("backendPort", port)
                 .putBoolean("networkConfigured", true)
-                .commit();
+                .apply();
         return backendUrl;
     }
 

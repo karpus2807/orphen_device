@@ -29,6 +29,8 @@ import geofence_page as gf_page
 import geofence_zones as gf
 import remote_ops
 import security_control
+import server_routes
+import server_services
 
 WIFI_SAVED_PROFILES_KEY = "wifi_saved_profiles_json"
 WIFI_SCAN_AT_KEY = "wifi_scan_at"
@@ -2761,21 +2763,13 @@ class ApiHandler(BaseHTTPRequestHandler):
         if path == "/devices/provision":
             query = parse_qs(parsed_url.query)
             device_id = str(query.get("deviceId", [""])[0]).strip()
-            if not device_id:
-                self.send_json({"error": "deviceId_required"}, status=400)
-                return
-            pending_token = consume_pending_device_token(device_id)
-            if not pending_token:
-                pending_token = redeliver_sealed_device_token(device_id)
-            if pending_token:
-                self.send_json({"ok": True, "deviceToken": pending_token, "registered": True})
-                return
-            device = get_device_by_id(device_id)
-            self.send_json({
-                "ok": True,
-                "registered": bool(device and device.get("registered")),
-                "pending": not bool(device and device.get("registered")),
-            })
+            payload, status = server_services.build_devices_provision_payload(
+                device_id,
+                consume_pending_device_token=consume_pending_device_token,
+                redeliver_sealed_device_token=redeliver_sealed_device_token,
+                get_device_by_id=get_device_by_id,
+            )
+            self.send_json(payload, status=status)
             return
         if path == "/policy":
             if not self.is_authenticated() and not self.request_has_valid_device_token():
@@ -3374,196 +3368,15 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
-        if path == "/login":
-            self.login()
-            return
-        if path == "/forgot-password":
-            self.request_password_reset()
-            return
-        if path == "/reset-password":
-            self.reset_password()
-            return
         if self.is_admin_route(path) and not self.is_authenticated():
             self.require_login(path)
             return
-        if path == "/devices/register":
-            self.send_json({"error": "registration_from_app_disabled"}, status=403)
-            return
-        if path == "/devices/checkin":
-            self.device_checkin()
-            return
-        if path == "/devices/deregister":
-            self.deregister_device()
-            return
-        if path == "/devices/delete":
-            self.delete_device()
-            return
-        if path == "/devices/commands/complete":
-            self.complete_device_command_handler()
-            return
-        if path == "/devices/telemetry":
-            self.device_telemetry()
-            return
-        if path == "/devices/security/request":
-            self.device_security_request()
-            return
-        if path == "/devices/security/verify":
-            self.device_security_verify()
-            return
-        if path == "/devices/security/approve":
-            self.admin_security_approve()
-            return
-        if path == "/devices/security/reject":
-            self.admin_security_reject()
-            return
-        if path == "/devices/audio/chunk":
-            self.device_audio_chunk()
-            return
-        if path == "/devices/bulk-action":
-            self.admin_bulk_action()
-            return
-        if path == "/devices/usage/refresh":
-            self.admin_refresh_usage()
-            return
-        if path == "/devices/set-group":
-            self.admin_set_device_group()
-            return
-        if path == "/devices/send-command":
-            self.admin_send_command()
-            return
-        if path == "/devices/audio/control":
-            self.admin_audio_control()
-            return
-        if path == "/devices/files/control":
-            self.admin_files_control()
-            return
-        if path == "/devices/files/upload":
-            self.admin_files_upload()
-            return
-        if path == "/devices/shell/exec":
-            self.admin_shell_exec()
-            return
-        if path == "/devices/remote/jobs/complete":
-            self.device_remote_job_complete()
-            return
-        if path == "/server-config":
-            self.save_server_config()
-            return
-        if path == "/policy-config":
-            self.save_policy_config()
-            return
-        if path == "/email-config":
-            self.save_email_config()
-            return
-        if path == "/email-config/test":
-            self.send_test_email_config()
-            return
-        if path == "/geofence-config":
-            self.send_redirect("/")
-            return
-        if path == "/ota-config":
-            self.send_redirect("/app-release-center")
-            return
-        if path == "/devices/geofence":
-            self.save_device_geofence_config()
-            return
-        if path == "/devices/wifi-profile":
-            self.save_device_wifi_profile_config()
-            return
-        if path == "/app-release-center/build":
-            self.app_release_build()
-            return
-        if path == "/app-release-center/build-push":
-            self.app_release_build_push()
-            return
-        if path == "/app-release-center/build-installer":
-            self.app_release_build_installer()
-            return
-        if path == "/app-release-center/push":
-            self.app_release_push()
-            return
-        if path == "/app-release-center/register":
-            self.app_release_register()
-            return
-        if path == "/app-release-center/push-release":
-            self.app_release_push_release()
-            return
-        if path == "/app-release-center/delete-releases":
-            self.app_release_delete_releases()
-            return
-        if path == "/wifi-profile-config":
-            self.send_redirect("/")
-            return
-        if path == "/enrollment-tokens":
-            self.admin_register_device()
+        if server_routes.dispatch_post(self, path):
             return
         self.send_json({"error": "not_found"}, status=404)
 
     def is_admin_route(self, path):
-        return path in {
-            "/",
-            "/devices",
-            "/devices/detail",
-            "/devices/detail.json",
-            "/devices/location",
-            "/devices/location.json",
-            "/devices/location/history.json",
-            "/devices/location/geocode.json",
-            "/devices/call-log",
-            "/devices/call-log.json",
-            "/devices/sms-history",
-            "/devices/sms-history.json",
-            "/devices/contacts",
-            "/devices/contacts.json",
-            "/devices/audio",
-            "/devices/audio/session.json",
-            "/devices/audio/chunks.json",
-            "/devices/audio/live.wav",
-            "/devices/audio/recording",
-            "/devices/audio/control",
-            "/devices/files",
-            "/devices/files/listing.json",
-            "/devices/files/download.json",
-            "/devices/files/content",
-            "/devices/files/control",
-            "/devices/files/upload",
-            "/devices/files/action.json",
-            "/devices/shell",
-            "/devices/shell/history.json",
-            "/devices/shell/exec",
-            "/devices/communications",
-            "/devices/timeline.json",
-            "/commands",
-            "/commands.json",
-            "/enrollment-qr",
-            "/server-config",
-            "/server-config.json",
-            "/policy-config",
-            "/email-config",
-            "/email-config/test",
-            "/app-release-center",
-            "/app-release-center/build",
-            "/app-release-center/build-push",
-            "/app-release-center/build-installer",
-            "/app-release-center/push",
-            "/app-release-center/push-release",
-            "/app-release-center/delete-releases",
-            "/app-release-center/register",
-            "/devices/geofence",
-            "/devices/wifi-profile",
-            "/devices/wifi-suggestions.json",
-            "/enrollment-tokens",
-            "/devices/send-command",
-            "/devices/bulk-action",
-            "/devices/set-group",
-            "/devices/security",
-            "/devices/security/requests.json",
-            "/devices/security/approve",
-            "/devices/security/reject",
-            "/devices/notifications",
-            "/devices/notifications.json",
-            "/devices/usage/refresh",
-        }
+        return path in server_routes.ADMIN_ROUTES
 
     def login(self):
         body = self.read_form_body()
