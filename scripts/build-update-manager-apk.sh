@@ -44,16 +44,16 @@ if [[ -d "${SRC}/res" ]]; then
   "${BT}/aapt2" link \
     -I "${PLATFORM}" \
     --manifest "${SRC}/AndroidManifest.xml" \
-    --version-code 6 \
-    --version-name "1.1.1" \
+    --version-code 7 \
+    --version-name "1.1.2" \
     -o "${UNSIGNED}" \
     build/um-compiled/resources.zip
 else
   "${BT}/aapt2" link \
     -I "${PLATFORM}" \
     --manifest "${SRC}/AndroidManifest.xml" \
-    --version-code 6 \
-    --version-name "1.1.1" \
+    --version-code 7 \
+    --version-name "1.1.2" \
     -o "${UNSIGNED}"
 fi
 

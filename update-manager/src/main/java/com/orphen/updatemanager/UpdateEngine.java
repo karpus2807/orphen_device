@@ -45,11 +45,75 @@ public final class UpdateEngine {
     }
 
     public static void saveCatalogSnapshot(Context context, CatalogInfo catalog, boolean updateNeeded) {
-        PrefsHelper.prefs(context).edit()
-                .putString(PrefsHelper.KEY_SERVER_VERSION_NAME, catalog == null ? "" : catalog.versionName)
-                .putInt(PrefsHelper.KEY_SERVER_VERSION_CODE, catalog == null ? 0 : catalog.versionCode)
-                .putBoolean(PrefsHelper.KEY_UPDATE_AVAILABLE, updateNeeded)
-                .apply();
+        android.content.SharedPreferences.Editor editor = PrefsHelper.prefs(context).edit()
+                .putLong(PrefsHelper.KEY_LAST_REFRESH_AT, System.currentTimeMillis())
+                .putBoolean(PrefsHelper.KEY_UPDATE_AVAILABLE, updateNeeded);
+        if (catalog == null) {
+            editor.putString(PrefsHelper.KEY_SERVER_VERSION_NAME, "")
+                    .putInt(PrefsHelper.KEY_SERVER_VERSION_CODE, 0)
+                    .putString(PrefsHelper.KEY_CATALOG_APP_LABEL, "")
+                    .putString(PrefsHelper.KEY_CATALOG_APK_URL, "");
+        } else {
+            editor.putString(PrefsHelper.KEY_SERVER_VERSION_NAME, catalog.versionName)
+                    .putInt(PrefsHelper.KEY_SERVER_VERSION_CODE, catalog.versionCode)
+                    .putString(PrefsHelper.KEY_CATALOG_APP_LABEL, catalog.appLabel)
+                    .putString(PrefsHelper.KEY_CATALOG_APK_URL, catalog.apkUrl);
+        }
+        editor.apply();
+    }
+
+    public static String buildVersionSummary(Context context, CatalogInfo catalog, boolean updateNeeded) {
+        InstalledVersion installed = getInstalledVersion(context);
+        StringBuilder summary = new StringBuilder();
+        if (catalog != null && catalog.appLabel != null && catalog.appLabel.length() > 0) {
+            summary.append(catalog.appLabel).append("\n");
+        }
+        summary.append("Package: ").append(CatalogFetcher.TARGET_PACKAGE).append("\n\n");
+        if (installed.installed) {
+            summary.append("Installed: ")
+                    .append(installed.versionName)
+                    .append(" (code ")
+                    .append(installed.versionCode)
+                    .append(")\n");
+        } else {
+            summary.append("Installed: Not installed on this phone\n");
+        }
+        if (catalog != null && catalog.versionCode > 0) {
+            summary.append("Server catalog: ")
+                    .append(catalog.versionName)
+                    .append(" (code ")
+                    .append(catalog.versionCode)
+                    .append(")\n");
+            if (catalog.apkUrl != null && catalog.apkUrl.length() > 0) {
+                summary.append("APK: ").append(catalog.apkUrl).append("\n");
+            }
+        } else {
+            summary.append("Server catalog: —\n");
+        }
+        summary.append("\n");
+        if (catalog == null || !catalog.isValid()) {
+            summary.append("Status: Catalog unavailable");
+        } else if (!installed.installed) {
+            summary.append("Status: App missing — install from server");
+        } else if (installed.versionCode >= catalog.versionCode) {
+            summary.append("Status: Up to date");
+        } else {
+            summary.append("Status: Update available (")
+                    .append(installed.versionCode)
+                    .append(" → ")
+                    .append(catalog.versionCode)
+                    .append(")");
+        }
+        if (updateNeeded) {
+            summary.append(" — tap Update");
+        }
+        summary.append("\nServer: ").append(PrefsHelper.getServerBaseUrl(context));
+        long refreshedAt = PrefsHelper.prefs(context).getLong(PrefsHelper.KEY_LAST_REFRESH_AT, 0L);
+        if (refreshedAt > 0L) {
+            summary.append("\nLast refresh: ")
+                    .append(android.text.format.DateFormat.format("yyyy-MM-dd HH:mm:ss", refreshedAt));
+        }
+        return summary.toString();
     }
 
     public static void broadcastState(Context context, String message) {

@@ -7,6 +7,9 @@ public final class PrefsHelper {
     private static final String NAME = "update_manager";
     public static final String KEY_SERVER_VERSION_NAME = "server_version_name";
     public static final String KEY_SERVER_VERSION_CODE = "server_version_code";
+    public static final String KEY_CATALOG_APP_LABEL = "catalog_app_label";
+    public static final String KEY_CATALOG_APK_URL = "catalog_apk_url";
+    public static final String KEY_LAST_REFRESH_AT = "last_refresh_at";
     public static final String KEY_UPDATE_AVAILABLE = "update_available";
 
     private PrefsHelper() {
