@@ -1,0 +1,32 @@
+# MariaDB + phpMyAdmin for Device Safety (optional; backend still uses SQLite by default).
+# Start: docker compose -f deploy/docker-compose.yml up -d
+services:
+  mariadb:
+    image: mariadb:10.11
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeRootPass}
+      MYSQL_DATABASE: device_safety
+      MYSQL_USER: device_safety
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-changeDbPass}
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./mysql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    ports:
+      - "127.0.0.1:3306:3306"
+
+  phpmyadmin:
+    image: phpmyadmin:5
+    restart: unless-stopped
+    depends_on:
+      - mariadb
+    environment:
+      PMA_HOST: mariadb
+      PMA_USER: device_safety
+      PMA_PASSWORD: ${MYSQL_PASSWORD:-changeDbPass}
+      UPLOAD_LIMIT: 512M
+    ports:
+      - "127.0.0.1:8081:80"
+
+volumes:
+  mariadb_data:

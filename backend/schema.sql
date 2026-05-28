@@ -215,3 +215,24 @@ ON device_notifications (device_id, timestamp);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_device_notifications_unique
 ON device_notifications (device_id, source_id);
+
+CREATE TABLE IF NOT EXISTS app_releases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    package_name TEXT NOT NULL,
+    app_label TEXT NOT NULL DEFAULT '',
+    version_name TEXT NOT NULL,
+    version_code INTEGER NOT NULL,
+    apk_filename TEXT NOT NULL,
+    release_notes TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_releases_pkg ON app_releases (package_name, version_code);
+
+CREATE TABLE IF NOT EXISTS update_manager_targets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    package_name TEXT NOT NULL UNIQUE,
+    app_label TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1
+);

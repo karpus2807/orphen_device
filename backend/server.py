@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
+import app_release
 import audio_stream
 import geocode
 import remote_ops
@@ -37,7 +38,11 @@ DATABASE_FILE = ROOT / "data" / "device_safety.db"
 SCHEMA_FILE = ROOT / "schema.sql"
 ONLINE_TIMEOUT_SECONDS = 90
 STATUS_POLL_SECONDS = 30
-SYNC_HISTORY_LIMIT = 2500
+SYNC_HISTORY_LIMIT = (
+    10_000_000
+    if os.environ.get("DEVICE_SAFETY_UNLIMITED", "1").strip().lower() in ("1", "true", "yes")
+    else int(os.environ.get("DEVICE_SAFETY_HISTORY_LIMIT", "2500") or 2500)
+)
 SESSIONS = set()
 DEVICE_LAST_STATUS = {}
 
@@ -93,6 +98,8 @@ def init_database():
         ensure_column(connection, "device_sms_history", "subject", "TEXT NOT NULL DEFAULT ''")
         ensure_communication_history_indexes(connection)
         dedupe_communication_history(connection)
+        app_release.ensure_app_releases_table(connection)
+        app_release.ensure_update_manager_targets(connection)
     migrate_json_files_to_database()
 
 
@@ -2510,11 +2517,20 @@ class ApiHandler(BaseHTTPRequestHandler):
         if path == "/ota-config":
             self.send_html(render_ota_config(read_ota_config(), read_server_config()))
             return
+        if path == "/app-release-center":
+            self.send_html(render_app_release_center())
+            return
         if path == "/wifi-profile-config":
             self.send_html(render_wifi_profile_config(read_wifi_profile_config()))
             return
         if path.startswith("/apk/"):
             self.serve_apk(path)
+            return
+        if path == "/api/update-manager/catalog":
+            self.send_update_manager_catalog()
+            return
+        if path == "/app-release-center/status.json":
+            self.send_json(app_release.get_build_status())
             return
         if path == "/enrollment-tokens":
             self.send_html(render_device_registration(read_pending_devices()))
@@ -3188,6 +3204,15 @@ class ApiHandler(BaseHTTPRequestHandler):
         if path == "/ota-config":
             self.save_ota_config()
             return
+        if path == "/app-release-center/build":
+            self.app_release_build()
+            return
+        if path == "/app-release-center/push":
+            self.app_release_push()
+            return
+        if path == "/app-release-center/register":
+            self.app_release_register()
+            return
         if path == "/wifi-profile-config":
             self.save_wifi_profile_config()
             return
@@ -3240,6 +3265,10 @@ class ApiHandler(BaseHTTPRequestHandler):
             "/email-config/test",
             "/geofence-config",
             "/ota-config",
+            "/app-release-center",
+            "/app-release-center/build",
+            "/app-release-center/push",
+            "/app-release-center/register",
             "/wifi-profile-config",
             "/enrollment-tokens",
             "/devices/send-command",
@@ -3910,6 +3939,111 @@ class ApiHandler(BaseHTTPRequestHandler):
         write_ota_config(config)
         self.send_html(render_ota_config(read_ota_config(), read_server_config(), "OTA settings saved."))
 
+    def app_release_build(self):
+        body = self.read_form_body()
+        version_name = str(body.get("versionName", [""])[0]).strip()
+        version_code = str(body.get("versionCode", [""])[0]).strip()
+        if not version_name or not version_code.isdigit():
+            self.send_html(render_app_release_center("Version name and numeric version code are required."))
+            return
+        ok, message = app_release.start_build(version_code, version_name)
+        self.send_html(render_app_release_center(message))
+
+    def app_release_register(self):
+        body = self.read_form_body()
+        package_name = str(body.get("packageName", ["com.example.devicesafety"])[0]).strip()
+        app_label = str(body.get("appLabel", ["Device Safety Manager"])[0]).strip()
+        version_name = str(body.get("versionName", [""])[0]).strip()
+        version_code = str(body.get("versionCode", [""])[0]).strip()
+        release_notes = str(body.get("releaseNotes", [""])[0]).strip()
+        apk_filename = "device-safety-manager-debug.apk"
+        apk_path = ROOT.parent / "apk" / apk_filename
+        if not version_name or not version_code.isdigit():
+            self.send_html(render_app_release_center("Version name and version code required."))
+            return
+        if not apk_path.is_file():
+            self.send_html(render_app_release_center("APK not found. Run Build APK first."))
+            return
+        with db_connect() as connection:
+            app_release.register_release(
+                connection,
+                package_name,
+                app_label,
+                version_name,
+                version_code,
+                release_notes,
+                apk_filename,
+            )
+            connection.commit()
+        config = {
+            "version": version_name,
+            "apkUrl": "",
+            "releaseNotes": release_notes,
+        }
+        write_ota_config(config)
+        self.send_html(render_app_release_center(f"Registered release {version_name} and updated OTA settings."))
+
+    def app_release_push(self):
+        body = self.read_form_body()
+        package_name = str(body.get("packageName", ["com.example.devicesafety"])[0]).strip()
+        server = read_server_config()
+        with db_connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM app_releases WHERE package_name = ? AND active = 1 ORDER BY version_code DESC LIMIT 1",
+                (package_name,),
+            ).fetchone()
+        if not row:
+            self.send_html(render_app_release_center("No active release. Build and register first."))
+            return
+        payload = app_release.build_ota_payload_for_release(
+            server["host"],
+            server["port"],
+            row["version_name"],
+            row["version_code"],
+            row["release_notes"],
+            row["apk_filename"],
+        )
+        write_ota_config(
+            {
+                "version": row["version_name"],
+                "apkUrl": payload["apkUrl"],
+                "releaseNotes": row["release_notes"],
+            }
+        )
+        queued = app_release.queue_push_to_devices(
+            create_device_command,
+            read_devices,
+            package_name,
+            payload,
+        )
+        self.send_html(
+            render_app_release_center(f"Queued push_app_update for {len(queued)} device(s).")
+        )
+
+    def send_update_manager_catalog(self):
+        server = read_server_config()
+        catalog = []
+        with db_connect() as connection:
+            targets = app_release.list_update_targets(connection)
+            for target in targets:
+                if not target.get("enabled"):
+                    continue
+                payload = app_release.get_active_release_for_package(
+                    connection,
+                    target["package_name"],
+                    server["host"],
+                    server["port"],
+                )
+                if payload:
+                    catalog.append(
+                        {
+                            "packageName": target["package_name"],
+                            "appLabel": target["app_label"],
+                            **payload,
+                        }
+                    )
+        self.send_json({"ok": True, "releases": catalog, "serverTime": int(time.time())})
+
     def save_wifi_profile_config(self):
         body = self.read_form_body()
         existing = read_wifi_profile_config()
@@ -4385,6 +4519,7 @@ ADMIN_NAV_GROUPS = (
             ("/geofence-config", "Geofence"),
             ("/wifi-profile-config", "Wi-Fi Profile"),
             ("/ota-config", "OTA Updates"),
+            ("/app-release-center", "App Build & OTA"),
         ),
     },
     {
@@ -5028,6 +5163,84 @@ def render_ota_config(config, server_config, message=""):
         content,
         active_path="/ota-config",
         fluid=False,
+    )
+
+
+def render_app_release_center(message=""):
+    message_html = f'<div class="alert alert-info">{escape(message)}</div>' if message else ""
+    version = app_release.read_version_properties()
+    server = read_server_config()
+    build_status = app_release.get_build_status()
+    status_line = escape(build_status.get("message") or "Ready")
+    log_tail = escape(build_status.get("logTail") or "")
+    with db_connect() as connection:
+        releases = app_release.list_releases(connection)
+    release_rows = ""
+    for row in releases[:15]:
+        release_rows += (
+            f"<tr><td>{escape(row.get('app_label') or '')}</td>"
+            f"<td><code>{escape(row.get('package_name') or '')}</code></td>"
+            f"<td>{escape(str(row.get('version_name') or ''))}</td>"
+            f"<td>{escape(str(row.get('version_code') or ''))}</td>"
+            f"<td>{'yes' if row.get('active') else ''}</td></tr>"
+        )
+    if not release_rows:
+        release_rows = '<tr><td colspan="5" class="text-secondary">No releases registered yet.</td></tr>'
+    content = (
+        f'{message_html}'
+        '<section class="admin-card p-4 mb-4">'
+        "<h2 class=\"h5\">1. Build APK on server</h2>"
+        "<p class=\"text-secondary\">Requires Android SDK on server (<code>--with-android-sdk</code> in setup-all.sh) "
+        "or upload APK manually to <code>apk/device-safety-manager-debug.apk</code>.</p>"
+        f'<p class="mb-2"><strong>Status:</strong> {status_line}</p>'
+        '<form method="post" action="/app-release-center/build" class="row g-2 mb-3">'
+        '<div class="col-md-4"><label class="form-label">Version name</label>'
+        f'<input class="form-control" name="versionName" value="{escape(version.get("versionName", "1.0.0"))}" required></div>'
+        '<div class="col-md-4"><label class="form-label">Version code</label>'
+        f'<input class="form-control" name="versionCode" value="{escape(version.get("versionCode", "1"))}" required></div>'
+        '<div class="col-md-4 d-flex align-items-end"><button class="btn btn-primary w-100" type="submit">Build APK</button></div>'
+        "</form>"
+        f'<pre class="small bg-dark text-light p-2 rounded" style="max-height:180px;overflow:auto">{log_tail}</pre>'
+        "</section>"
+        '<section class="admin-card p-4 mb-4">'
+        "<h2 class=\"h5\">2. Register release</h2>"
+        '<form method="post" action="/app-release-center/register">'
+        '<div class="row g-2">'
+        '<div class="col-md-3"><label class="form-label">Package</label>'
+        '<input class="form-control" name="packageName" value="com.example.devicesafety"></div>'
+        '<div class="col-md-3"><label class="form-label">App label</label>'
+        '<input class="form-control" name="appLabel" value="Device Safety Manager"></div>'
+        '<div class="col-md-2"><label class="form-label">Version name</label>'
+        f'<input class="form-control" name="versionName" value="{escape(version.get("versionName", ""))}"></div>'
+        '<div class="col-md-2"><label class="form-label">Version code</label>'
+        f'<input class="form-control" name="versionCode" value="{escape(version.get("versionCode", ""))}"></div>'
+        '<div class="col-md-2 d-flex align-items-end"><button class="btn btn-outline-primary w-100" type="submit">Register</button></div>'
+        "</div>"
+        '<label class="form-label mt-2">Release notes</label>'
+        '<textarea class="form-control" name="releaseNotes" rows="2"></textarea>'
+        "</form></section>"
+        '<section class="admin-card p-4 mb-4">'
+        "<h2 class=\"h5\">3. Push OTA to all registered devices</h2>"
+        "<p class=\"text-secondary\">Queues <code>push_app_update</code> for each enrolled device (installed apps sync on next poll).</p>"
+        '<form method="post" action="/app-release-center/push">'
+        '<input type="hidden" name="packageName" value="com.example.devicesafety">'
+        '<button class="btn btn-success" type="submit">Push update to all devices</button>'
+        "</form></section>"
+        '<section class="admin-card p-4">'
+        "<h2 class=\"h5\">Update Manager app</h2>"
+        "<p class=\"text-secondary\">Install <code>update-manager</code> APK on devices once. It polls "
+        f"<code>http://{escape(server.get('host'))}:{escape(server.get('port'))}/api/update-manager/catalog</code> "
+        "and auto-installs listed packages.</p>"
+        '<table class="table table-sm"><thead><tr><th>App</th><th>Package</th><th>Version</th><th>Code</th><th>Active</th></tr></thead>'
+        f"<tbody>{release_rows}</tbody></table>"
+        "</section>"
+    )
+    return render_admin_page(
+        "App Build & OTA",
+        "Build APK, register version, and push updates to phones already running Device Safety Manager.",
+        content,
+        active_path="/app-release-center",
+        fluid=True,
     )
 
 
