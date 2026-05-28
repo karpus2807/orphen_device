@@ -2782,6 +2782,9 @@ class ApiHandler(BaseHTTPRequestHandler):
         if path == "/health":
             self.send_json({"ok": True, "service": "device-safety-backend"})
             return
+        if path == "/hi":
+            self.send_json({"message": "hi"})
+            return
         if path == "/devices":
             devices = [decorate_device(device) for device in read_devices()]
             attach_wifi_dashboard_snapshot(devices)

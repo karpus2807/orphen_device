@@ -11,6 +11,7 @@ python3 backend/server.py
 ## Endpoints
 
 - `GET /health` - backend health check
+- `GET /hi` - simple hello endpoint
 - `POST /devices/register` - register or update a device
 - `GET /devices` - list registered devices
 
