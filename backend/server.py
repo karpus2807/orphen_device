@@ -2408,7 +2408,7 @@ def read_policy_for_device(device_id):
 def build_ota_payload():
     config = read_ota_config()
     server = read_server_config()
-    apk_url = config.get("apkUrl") or f"{app_release.public_base_url(server['host'], server['port'])}/apk/dsm.apk"
+    apk_url = config.get("apkUrl") or f"http://{server['host']}:{server['port']}/apk/dsm.apk"
     return {
         "version": config.get("version", "1.0.0"),
         "apkUrl": apk_url,

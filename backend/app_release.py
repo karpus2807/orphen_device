@@ -23,23 +23,6 @@ UPDATE_MANAGER_APK = "oui.apk"
 BUILD_LOG = ROOT / "backend" / "data" / "build.log"
 DATABASE_FILE = ROOT / "backend" / "data" / "device_safety.db"
 BUILD_LOCK = threading.Lock()
-
-
-def public_base_url(host, port):
-    """Build external URL for APK/catalog (HTTPS via reverse proxy, backend still on 9030)."""
-    host = str(host or "127.0.0.1").strip()
-    port = str(port or "8080").strip()
-    scheme = os.environ.get("DEVICE_SAFETY_PUBLIC_SCHEME", "").strip().lower()
-    if scheme not in ("http", "https"):
-        scheme = "https" if port == "443" else "http"
-    # Behind nginx/Caddy: scheme=https + public host → no :9030 in phone-facing URLs
-    if scheme == "https" and host not in ("127.0.0.1", "localhost") and not host.replace(".", "").isdigit():
-        return f"https://{host}"
-    if (scheme == "https" and port == "443") or (scheme == "http" and port == "80"):
-        return f"{scheme}://{host}"
-    return f"{scheme}://{host}:{port}"
-
-
 BUILD_STATE = {
     "running": False,
     "last_ok": False,
@@ -664,7 +647,9 @@ def push_release_to_devices(connection, release_id, server_host, server_port, cr
 
 
 def build_ota_payload_for_release(server_host, server_port, version_name, version_code, release_notes, apk_filename):
-    apk_url = f"{public_base_url(server_host, server_port)}/apk/{apk_filename}"
+    host = str(server_host or "127.0.0.1").strip()
+    port = str(server_port or "9030").strip()
+    apk_url = f"http://{host}:{port}/apk/{apk_filename}"
     return {
         "version": version_name,
         "versionCode": int(version_code),
