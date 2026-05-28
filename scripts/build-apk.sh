@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ZXING="${ROOT}/app/libs/core-3.5.3.jar"
-OUT="${ROOT}/build/device-safety-manager-debug.apk"
+OUT="${ROOT}/build/dsm.apk"
 UNSIGNED="${ROOT}/build/unsigned.apk"
 
 resolve_sdk() {
@@ -106,7 +106,7 @@ echo "Signing APK..."
   "${UNSIGNED}"
 
 mkdir -p "${ROOT}/apk"
-cp "${OUT}" "${ROOT}/apk/device-safety-manager-debug.apk"
+cp "${OUT}" "${ROOT}/apk/dsm.apk"
 
 echo
 echo "Built: ${OUT}"

@@ -90,15 +90,19 @@ public class UpdateSyncService extends Service {
     private void showUpdateAvailableNotification(CatalogInfo catalog) {
         Intent action = new Intent(this, UpdateActionReceiver.class);
         action.setAction(UpdateActionReceiver.ACTION_RUN_UPDATE);
-        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        int updateFlags = PendingIntent.FLAG_UPDATE_CURRENT;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            flags |= PendingIntent.FLAG_MUTABLE;
+            updateFlags |= PendingIntent.FLAG_MUTABLE;
         }
-        PendingIntent updatePending = PendingIntent.getBroadcast(this, 42, action, flags);
+        PendingIntent updatePending = PendingIntent.getBroadcast(this, 42, action, updateFlags);
 
         Intent openApp = new Intent(this, MainActivity.class);
         openApp.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        PendingIntent openPending = PendingIntent.getActivity(this, 43, openApp, PendingIntent.FLAG_UPDATE_CURRENT);
+        int openFlags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            openFlags |= PendingIntent.FLAG_IMMUTABLE;
+        }
+        PendingIntent openPending = PendingIntent.getActivity(this, 43, openApp, openFlags);
 
         UpdateEngine.InstalledVersion installed = UpdateEngine.getInstalledVersion(this);
         String installedText = installed.installed

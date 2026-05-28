@@ -17,7 +17,8 @@ BUILD_DIR = ROOT / "build"
 VERSION_FILE = ROOT / "app" / "version.properties"
 BUILD_SCRIPT = ROOT / "scripts" / "build-apk.sh"
 UPDATE_MANAGER_BUILD_SCRIPT = ROOT / "scripts" / "build-update-manager-apk.sh"
-UPDATE_MANAGER_APK = "orphen-update-manager.apk"
+DSM_APK_CANONICAL = "dsm.apk"
+UPDATE_MANAGER_APK = "oui.apk"
 BUILD_LOG = ROOT / "backend" / "data" / "build.log"
 DATABASE_FILE = ROOT / "backend" / "data" / "device_safety.db"
 BUILD_LOCK = threading.Lock()
@@ -115,8 +116,7 @@ def bump_version():
 
 
 def apk_filename_for_version(version_name, version_code):
-    safe = re.sub(r"[^\w.\-]+", "_", str(version_name).strip()) or "release"
-    return f"device-safety-manager-{safe}-{version_code}.apk"
+    return f"dsm-{int(version_code)}.apk"
 
 
 def resolve_android_sdk_env(env):
@@ -154,10 +154,12 @@ def resolve_android_sdk_env(env):
 def publish_built_apk(version_name, version_code):
     """Copy build output to versioned APK name + canonical debug name for /apk/ URL."""
     APK_DIR.mkdir(parents=True, exist_ok=True)
-    built = BUILD_DIR / "device-safety-manager-debug.apk"
-    canonical = APK_DIR / "device-safety-manager-debug.apk"
+    built = BUILD_DIR / "dsm.apk"
+    canonical = APK_DIR / DSM_APK_CANONICAL
     if not built.is_file():
-        built = APK_DIR / "device-safety-manager-debug.apk"
+        built = APK_DIR / DSM_APK_CANONICAL
+    if not built.is_file():
+        built = _find_legacy_built_apk()
     if not built.is_file() or built.stat().st_size < 100_000:
         raise FileNotFoundError("APK missing after build")
     versioned_name = apk_filename_for_version(version_name, version_code)
@@ -479,18 +481,24 @@ def get_active_release_for_package(connection, package_name, server_host, server
 
 def _default_apk_filename_for_package(package_name):
     if not APK_DIR.is_dir():
-        return "device-safety-manager-debug.apk"
+        return DSM_APK_CANONICAL
     if package_name == "com.orphen.devicesafety":
-        preferred = APK_DIR / "device-safety-manager-debug.apk"
+        preferred = APK_DIR / DSM_APK_CANONICAL
         if preferred.is_file():
             return preferred.name
-        candidates = sorted(APK_DIR.glob("device-safety-manager-*.apk"), key=lambda p: p.stat().st_mtime, reverse=True)
+        candidates = sorted(APK_DIR.glob("dsm-*.apk"), key=lambda p: p.stat().st_mtime, reverse=True)
         if candidates:
             return candidates[0].name
+        legacy = APK_DIR / "device-safety-manager-debug.apk"
+        if legacy.is_file():
+            return legacy.name
     if package_name == "com.orphen.updatemanager":
         preferred = APK_DIR / UPDATE_MANAGER_APK
         if preferred.is_file():
             return preferred.name
+        legacy = APK_DIR / "orphen-update-manager.apk"
+        if legacy.is_file():
+            return legacy.name
     return ""
 
 

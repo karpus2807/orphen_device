@@ -15,36 +15,60 @@ public class InstallResultReceiver extends BroadcastReceiver {
         if (intent == null) {
             return;
         }
+        final Context appContext = context.getApplicationContext();
         String apkPath = intent.getStringExtra(ApkInstaller.EXTRA_APK_PATH);
         String packageName = intent.getStringExtra(ApkInstaller.EXTRA_PACKAGE_NAME);
+        int targetCode = intent.getIntExtra(ApkInstaller.EXTRA_TARGET_VERSION_CODE, 0);
         int status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE);
         String message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
         if (status == PackageInstaller.STATUS_SUCCESS) {
-            int targetCode = intent.getIntExtra(ApkInstaller.EXTRA_TARGET_VERSION_CODE, 0);
             if (packageName != null && packageName.length() > 0 && targetCode > 0) {
-                PrefsHelper.recordSuccessfulInstall(context, packageName, targetCode);
+                PrefsHelper.recordSuccessfulInstall(appContext, packageName, targetCode);
             }
-            ApkInstaller.deleteDownloadedApks(apkPath, packageName, context);
-            Toast.makeText(context, "Update installed. Downloaded APK removed.", Toast.LENGTH_LONG).show();
-            try {
-                CatalogInfo catalog = CatalogFetcher.fetchTargetRelease(context);
-                UpdateEngine.saveCatalogSnapshot(context, catalog, false);
-            } catch (Exception ignored) {
-                PrefsHelper.prefs(context).edit().putBoolean(PrefsHelper.KEY_UPDATE_AVAILABLE, false).apply();
-            }
-            UpdateEngine.broadcastState(context, "Update installed successfully");
-            UpdateSyncService.start(context);
+            ApkInstaller.deleteDownloadedApks(apkPath, packageName, appContext);
+            Toast.makeText(appContext, "Installed. APK file removed.", Toast.LENGTH_LONG).show();
+            refreshAfterInstall(appContext);
             return;
         }
         if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
             Intent confirm = intent.getParcelableExtra(Intent.EXTRA_INTENT);
             if (confirm != null) {
                 confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                context.startActivity(confirm);
+                appContext.startActivity(confirm);
             }
             return;
         }
         Log.w(TAG, "failed: " + message);
-        Toast.makeText(context, "Install failed: " + message, Toast.LENGTH_LONG).show();
+        Toast.makeText(appContext, "Install failed: " + message, Toast.LENGTH_LONG).show();
+        UpdateEngine.broadcastState(appContext, "Install failed: " + message);
+    }
+
+    private void refreshAfterInstall(final Context context) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Thread.sleep(1500);
+                    CatalogInfo catalog = CatalogFetcher.fetchTargetRelease(context);
+                    boolean needed = UpdateEngine.isUpdateNeeded(context, catalog);
+                    UpdateEngine.saveCatalogSnapshot(context, catalog, needed);
+                    UpdateEngine.broadcastState(
+                            context,
+                            needed ? "Install done — server has newer build" : "Installed: " + catalog.versionName
+                    );
+                    context.sendBroadcast(new Intent(UpdateEngine.ACTION_UPDATE_AVAILABLE).setPackage(context.getPackageName()));
+                } catch (Exception exception) {
+                    Log.w(TAG, "refresh: " + exception.getMessage());
+                    UpdateEngine.InstalledVersion installed = UpdateEngine.getInstalledVersion(context);
+                    String line = installed.installed
+                            ? "Installed v" + installed.versionName + " (code " + installed.versionCode + ")"
+                            : "Install finished — reopen app to refresh";
+                    UpdateEngine.saveCatalogSnapshot(context, null, false);
+                    UpdateEngine.broadcastState(context, line);
+                    context.sendBroadcast(new Intent(UpdateEngine.ACTION_UPDATE_AVAILABLE).setPackage(context.getPackageName()));
+                }
+            }
+        }).start();
+        UpdateSyncService.start(context);
     }
 }

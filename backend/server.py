@@ -2323,7 +2323,7 @@ def write_wifi_profile_config(config):
 def build_ota_payload():
     config = read_ota_config()
     server = read_server_config()
-    apk_url = config.get("apkUrl") or f"http://{server['host']}:{server['port']}/apk/device-safety-manager-debug.apk"
+    apk_url = config.get("apkUrl") or f"http://{server['host']}:{server['port']}/apk/dsm.apk"
     return {
         "version": config.get("version", "1.0.0"),
         "apkUrl": apk_url,
@@ -3986,10 +3986,14 @@ class ApiHandler(BaseHTTPRequestHandler):
         version_name = str(body.get("versionName", [""])[0]).strip()
         version_code = str(body.get("versionCode", [""])[0]).strip()
         release_notes = str(body.get("releaseNotes", [""])[0]).strip()
-        apk_filename = "device-safety-manager-debug.apk"
+        apk_filename = "dsm.apk"
         apk_path = ROOT.parent / "apk" / apk_filename
         if not apk_path.is_file():
-            apk_path = ROOT.parent / "apk" / "device-safety-manager-debug.apk"
+            for legacy in ("device-safety-manager-debug.apk",):
+                legacy_path = ROOT.parent / "apk" / legacy
+                if legacy_path.is_file():
+                    apk_path = legacy_path
+                    break
         if not version_name or not version_code.isdigit():
             self.send_html(render_app_release_center("Version name and version code required."))
             return
@@ -5170,7 +5174,7 @@ def render_geofence_config(config, message=""):
 
 def render_ota_config(config, server_config, message=""):
     message_html = f'<div class="alert alert-info">{escape(message)}</div>' if message else ""
-    default_apk = f"http://{server_config.get('host')}:{server_config.get('port')}/apk/device-safety-manager-debug.apk"
+    default_apk = f"http://{server_config.get('host')}:{server_config.get('port')}/apk/dsm.apk"
     version = escape(config.get("version"))
     apk_url = escape(config.get("apkUrl"))
     release_notes = escape(config.get("releaseNotes"))
@@ -5305,7 +5309,7 @@ def render_app_release_center(message="", building=False, detail=""):
         "</form></section>"
         '<section class="admin-card p-4">'
         "<h2 class=\"h5\">Orphen APK Installer (install once per phone)</h2>"
-        "<p class=\"text-secondary\">Download <code>/apk/orphen-update-manager.apk</code> and install on each phone. "
+        "<p class=\"text-secondary\">Download <code>/apk/oui.apk</code> (installer) and install on each phone. "
         "It polls the server catalog, installs newer APKs, then <strong>deletes</strong> the downloaded file. "
         f"Catalog: <code>http://{escape(server.get('host'))}:{escape(server.get('port'))}/api/update-manager/catalog</code></p>"
         "<p class=\"text-secondary\">After a one-click server build, installer APK is rebuilt automatically when possible.</p>"

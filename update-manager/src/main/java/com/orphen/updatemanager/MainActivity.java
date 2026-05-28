@@ -161,7 +161,7 @@ public class MainActivity extends Activity {
     }
 
     private void refreshVersionUi() {
-        UpdateEngine.InstalledVersion installed = UpdateEngine.getInstalledVersion(this);
+        UpdateEngine.InstalledVersion installed = UpdateEngine.getInstalledVersion(getApplicationContext());
         if (installed.installed) {
             installedVersionView.setText("Installed: " + installed.versionName + " (code " + installed.versionCode + ")");
         } else {

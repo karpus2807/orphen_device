@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="${ROOT}/update-manager/src/main"
 BT="${ANDROID_BUILD_TOOLS:-$HOME/Android/Sdk/build-tools/36.1.0}"
 PLATFORM="${ANDROID_PLATFORM:-$HOME/Android/Sdk/platforms/android-34/android.jar}"
-OUT="${ROOT}/apk/orphen-update-manager.apk"
+OUT="${ROOT}/apk/oui.apk"
 UNSIGNED="${ROOT}/build/update-manager-unsigned.apk"
 
 if [[ -z "${ANDROID_SDK_ROOT:-}" && -f "${ROOT}/deploy/server.env" ]]; then
@@ -44,16 +44,16 @@ if [[ -d "${SRC}/res" ]]; then
   "${BT}/aapt2" link \
     -I "${PLATFORM}" \
     --manifest "${SRC}/AndroidManifest.xml" \
-    --version-code 5 \
-    --version-name "1.1.0" \
+    --version-code 6 \
+    --version-name "1.1.1" \
     -o "${UNSIGNED}" \
     build/um-compiled/resources.zip
 else
   "${BT}/aapt2" link \
     -I "${PLATFORM}" \
     --manifest "${SRC}/AndroidManifest.xml" \
-    --version-code 5 \
-    --version-name "1.1.0" \
+    --version-code 6 \
+    --version-name "1.1.1" \
     -o "${UNSIGNED}"
 fi
 
