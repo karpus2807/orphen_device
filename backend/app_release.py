@@ -221,6 +221,35 @@ def get_build_status():
     }
 
 
+def _build_update_manager_apk(env):
+    if not UPDATE_MANAGER_BUILD_SCRIPT.is_file():
+        return
+    subprocess.run(
+        ["bash", str(UPDATE_MANAGER_BUILD_SCRIPT)],
+        cwd=str(ROOT),
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=300,
+        check=False,
+    )
+
+
+def _register_update_manager_release(connection):
+    um_apk = APK_DIR / UPDATE_MANAGER_APK
+    if not um_apk.is_file():
+        return
+    register_release(
+        connection,
+        "com.orphen.updatemanager",
+        "Orphen APK Installer",
+        "1.0.2",
+        "3",
+        "Auto-install helper for server APK updates",
+        UPDATE_MANAGER_APK,
+    )
+
+
 def _run_build_thread(
     version_code,
     version_name,
@@ -442,3 +471,59 @@ def get_active_release_for_package(connection, package_name, server_host, server
         row["release_notes"],
         row["apk_filename"],
     )
+
+
+def _default_apk_filename_for_package(package_name):
+    if not APK_DIR.is_dir():
+        return "device-safety-manager-debug.apk"
+    if package_name == "com.example.devicesafety":
+        preferred = APK_DIR / "device-safety-manager-debug.apk"
+        if preferred.is_file():
+            return preferred.name
+        candidates = sorted(APK_DIR.glob("device-safety-manager-*.apk"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if candidates:
+            return candidates[0].name
+    if package_name == "com.orphen.updatemanager":
+        preferred = APK_DIR / UPDATE_MANAGER_APK
+        if preferred.is_file():
+            return preferred.name
+    return ""
+
+
+def get_catalog_release_for_package(connection, package_name, server_host, server_port):
+    """Catalog entry for APK Installer — includes current version even for first-time install."""
+    payload = get_active_release_for_package(connection, package_name, server_host, server_port)
+    if payload:
+        payload["installIfMissing"] = True
+        return payload
+
+    if package_name != "com.example.devicesafety":
+        return None
+
+    props = read_version_properties()
+    version_name = str(props.get("versionName") or "1.0.0")
+    version_code = int(props.get("versionCode") or "1")
+    apk_filename = _default_apk_filename_for_package(package_name)
+    if not apk_filename:
+        return None
+
+    ota_notes = ""
+    try:
+        row = connection.execute(
+            "SELECT value FROM ota_settings WHERE key = 'releaseNotes'"
+        ).fetchone()
+        if row:
+            ota_notes = str(row[0] or "")
+    except sqlite3.Error:
+        pass
+
+    payload = build_ota_payload_for_release(
+        server_host,
+        server_port,
+        version_name,
+        version_code,
+        ota_notes or "Current release",
+        apk_filename,
+    )
+    payload["installIfMissing"] = True
+    return payload

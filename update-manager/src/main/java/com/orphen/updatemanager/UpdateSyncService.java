@@ -24,16 +24,11 @@ import java.net.URL;
 public class UpdateSyncService extends Service {
     public static final String ACTION_SYNC_NOW = "com.orphen.updatemanager.SYNC_NOW";
     private static final String TAG = "UpdateSyncService";
-    /** Check server every 90s so pushed updates install quickly. */
+    private static final String TARGET_DSM = "com.example.devicesafety";
     private static final long POLL_MS = 90_000L;
+    private static final long POLL_MS_MISSING = 30_000L;
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private final Runnable pollRunnable = new Runnable() {
-        @Override
-        public void run() {
-            pollAndInstall();
-            handler.postDelayed(this, POLL_MS);
-        }
-    };
+    private Runnable pollRunnable;
 
     public static void start(Context context) {
         Intent intent = new Intent(context, UpdateSyncService.class);
@@ -49,13 +44,21 @@ public class UpdateSyncService extends Service {
     public void onCreate() {
         super.onCreate();
         startForeground(7101, buildNotification("Checking for updates"));
+        pollRunnable = new Runnable() {
+            @Override
+            public void run() {
+                boolean anyMissing = pollAndInstall();
+                long delay = anyMissing ? POLL_MS_MISSING : POLL_MS;
+                handler.postDelayed(this, delay);
+            }
+        };
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         handler.removeCallbacks(pollRunnable);
         pollAndInstall();
-        handler.postDelayed(pollRunnable, POLL_MS);
+        handler.postDelayed(pollRunnable, POLL_MS_MISSING);
         return START_STICKY;
     }
 
@@ -70,8 +73,10 @@ public class UpdateSyncService extends Service {
         super.onDestroy();
     }
 
-    private void pollAndInstall() {
-        new Thread(new Runnable() {
+    /** @return true if a catalog app is not installed on the device */
+    private boolean pollAndInstall() {
+        final boolean[] anyMissing = {false};
+        Thread worker = new Thread(new Runnable() {
             @Override
             public void run() {
                 try {
@@ -91,33 +96,70 @@ public class UpdateSyncService extends Service {
                     connection.disconnect();
                     JSONObject json = new JSONObject(body.toString());
                     JSONArray releases = json.optJSONArray("releases");
-                    if (releases == null) {
+                    if (releases == null || releases.length() == 0) {
+                        updateNotification("No releases on server catalog");
                         return;
                     }
                     for (int i = 0; i < releases.length(); i++) {
                         JSONObject item = releases.getJSONObject(i);
-                        String packageName = item.optString("packageName", "");
-                        String apkUrl = item.optString("apkUrl", "");
-                        int targetCode = item.optInt("versionCode", 0);
-                        if (packageName.length() == 0 || apkUrl.length() == 0 || targetCode <= 0) {
-                            continue;
+                        if (processRelease(item)) {
+                            anyMissing[0] = true;
                         }
-                        int installed = ApkInstaller.readInstalledVersionCode(UpdateSyncService.this, packageName);
-                        if (installed >= targetCode && installed > 0) {
-                            continue;
-                        }
-                        updateNotification("Downloading " + item.optString("appLabel", packageName));
-                        File apk = ApkInstaller.downloadApk(UpdateSyncService.this, apkUrl, packageName, targetCode);
-                        updateNotification("Installing " + item.optString("appLabel", packageName));
-                        ApkInstaller.installApk(UpdateSyncService.this, apk, packageName);
                     }
-                    updateNotification("Idle — watching for updates");
+                    if (!ApkInstaller.isPackageInstalled(UpdateSyncService.this, TARGET_DSM)) {
+                        anyMissing[0] = true;
+                    }
+                    if (anyMissing[0]) {
+                        updateNotification("Waiting for installs — rechecking soon");
+                    } else {
+                        updateNotification("All apps up to date");
+                    }
                 } catch (Exception exception) {
                     Log.w(TAG, "poll failed: " + exception.getMessage());
-                    updateNotification("Update check failed");
+                    updateNotification("Update check failed: " + exception.getMessage());
                 }
             }
-        }).start();
+        });
+        worker.start();
+        try {
+            worker.join(120_000);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+        }
+        return anyMissing[0];
+    }
+
+    /**
+     * @return true if this package is missing from the device
+     */
+    private boolean processRelease(JSONObject item) throws Exception {
+        String packageName = item.optString("packageName", "");
+        String apkUrl = item.optString("apkUrl", "");
+        String appLabel = item.optString("appLabel", packageName);
+        int targetCode = item.optInt("versionCode", 0);
+        boolean installIfMissing = item.optBoolean("installIfMissing", true);
+        if (packageName.length() == 0 || apkUrl.length() == 0 || targetCode <= 0) {
+            return false;
+        }
+        boolean installed = ApkInstaller.isPackageInstalled(this, packageName);
+        int installedCode = installed ? ApkInstaller.readInstalledVersionCode(this, packageName) : 0;
+        boolean missing = !installed;
+        boolean outdated = installed && installedCode > 0 && installedCode < targetCode;
+        if (missing && !installIfMissing) {
+            return true;
+        }
+        if (!missing && !outdated) {
+            return false;
+        }
+        if (missing) {
+            updateNotification("Not installed — installing " + appLabel);
+            Log.i(TAG, "Fresh install: " + packageName + " v" + targetCode);
+        } else {
+            updateNotification("Updating " + appLabel);
+        }
+        File apk = ApkInstaller.downloadApk(this, apkUrl, packageName, targetCode);
+        ApkInstaller.installApk(this, apk, packageName);
+        return missing;
     }
 
     private void updateNotification(String text) {

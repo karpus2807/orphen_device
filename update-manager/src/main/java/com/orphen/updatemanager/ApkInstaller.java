@@ -24,7 +24,22 @@ public final class ApkInstaller {
     private ApkInstaller() {
     }
 
+    public static boolean isPackageInstalled(Context context, String packageName) {
+        if (packageName == null || packageName.length() == 0) {
+            return false;
+        }
+        try {
+            context.getPackageManager().getPackageInfo(packageName, 0);
+            return true;
+        } catch (Exception exception) {
+            return false;
+        }
+    }
+
     public static int readInstalledVersionCode(Context context, String packageName) {
+        if (!isPackageInstalled(context, packageName)) {
+            return 0;
+        }
         try {
             PackageInfo info = context.getPackageManager().getPackageInfo(packageName, 0);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {

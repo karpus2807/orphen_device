@@ -4060,7 +4060,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             for target in targets:
                 if not target.get("enabled"):
                     continue
-                payload = app_release.get_active_release_for_package(
+                payload = app_release.get_catalog_release_for_package(
                     connection,
                     target["package_name"],
                     server["host"],
@@ -5304,10 +5304,11 @@ def render_app_release_center(message="", building=False, detail=""):
         '<button class="btn btn-outline-success" type="submit">Push last registered release only</button>'
         "</form></section>"
         '<section class="admin-card p-4">'
-        "<h2 class=\"h5\">Update Manager app</h2>"
-        "<p class=\"text-secondary\">Install <code>update-manager</code> APK on devices once. It polls "
-        f"<code>http://{escape(server.get('host'))}:{escape(server.get('port'))}/api/update-manager/catalog</code> "
-        "and auto-installs listed packages.</p>"
+        "<h2 class=\"h5\">Orphen APK Installer (install once per phone)</h2>"
+        "<p class=\"text-secondary\">Download <code>/apk/orphen-update-manager.apk</code> and install on each phone. "
+        "It polls the server catalog, installs newer APKs, then <strong>deletes</strong> the downloaded file. "
+        f"Catalog: <code>http://{escape(server.get('host'))}:{escape(server.get('port'))}/api/update-manager/catalog</code></p>"
+        "<p class=\"text-secondary\">After a one-click server build, installer APK is rebuilt automatically when possible.</p>"
         '<table class="table table-sm"><thead><tr><th>App</th><th>Package</th><th>Version</th><th>Code</th><th>APK file</th><th>Active</th></tr></thead>'
         f"<tbody>{release_rows}</tbody></table>"
         "</section>"

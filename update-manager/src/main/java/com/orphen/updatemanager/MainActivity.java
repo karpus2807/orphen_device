@@ -73,8 +73,17 @@ public class MainActivity extends Activity {
         root.addView(syncNow);
 
         setContentView(root);
-        if (PrefsHelper.prefs(this).getString("serverHost", "").length() > 0) {
+
+        String savedHost = PrefsHelper.prefs(this).getString("serverHost", "");
+        if (savedHost.length() > 0) {
             UpdateSyncService.start(this);
+            if (!ApkInstaller.isPackageInstalled(this, "com.example.devicesafety")) {
+                Toast.makeText(
+                        this,
+                        "Device Safety not installed — downloading current version from server…",
+                        Toast.LENGTH_LONG
+                ).show();
+            }
         }
     }
 }
