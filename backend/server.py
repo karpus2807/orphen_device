@@ -25,6 +25,8 @@ sys.path.insert(0, str(ROOT))
 import app_release
 import audio_stream
 import geocode
+import geofence_page as gf_page
+import geofence_zones as gf
 import remote_ops
 import security_control
 DATA_FILE = ROOT / "data" / "devices.json"
@@ -911,8 +913,6 @@ def update_device_admin_status(device_id, active):
 
 def update_device_telemetry_from_body(device_id, body):
     devices = read_devices()
-    geofence_config = read_device_geofence_config(device_id)
-    office_ssid = str(geofence_config.get("officeWifiSsid", "")).strip()
     wifi_ssid = str(body.get("wifiSsid", "")).strip()
     usage_summary = body.get("usageSummary")
     updated = False
@@ -920,7 +920,6 @@ def update_device_telemetry_from_body(device_id, body):
     for device in devices:
         if device.get("deviceId") != device_id:
             continue
-        previous_geofence_ok = device.get("geofenceOk")
         if "deviceAdminActive" in body:
             device["deviceAdminActive"] = bool(body.get("deviceAdminActive"))
         if wifi_ssid or "wifiSsid" in body:
@@ -962,15 +961,6 @@ def update_device_telemetry_from_body(device_id, body):
             device["appLocked"] = True
         if "appHidden" in body and bool(body.get("appHidden")):
             device["appHidden"] = True
-        if office_ssid:
-            geofence_ok = bool(wifi_ssid) and wifi_ssid.lower() == office_ssid.lower()
-            device["geofenceOk"] = geofence_ok
-            if previous_geofence_ok is True and not geofence_ok:
-                record_device_event(device_id, "geofence_left", f"Left office Wi-Fi ({wifi_ssid or 'unknown'})")
-                if geofence_config.get("alertOnLeave"):
-                    notify_geofence_left(device_id, device, wifi_ssid)
-            elif previous_geofence_ok is False and geofence_ok:
-                record_device_event(device_id, "geofence_enter", f"Connected to office Wi-Fi ({wifi_ssid})")
         if "locationPermissionGranted" in body:
             device["locationPermissionGranted"] = bool(body.get("locationPermissionGranted"))
         location_values = parse_location_payload(body)
@@ -989,6 +979,23 @@ def update_device_telemetry_from_body(device_id, body):
                 location_values["accuracy"],
                 location_values["timestamp"],
             )
+        geofence_config = read_device_geofence_config(device_id)
+        if geofence_config.get("wifiNetworks") or geofence_config.get("locationZones"):
+            saved_geofence = read_device_key_values(device_id, {})
+            geofence_updates = gf.process_geofence_update(
+                device_id,
+                device,
+                body,
+                geofence_config,
+                saved_geofence.get(gf.GEOFENCE_STATE_KEY),
+                record_event_fn=record_device_event,
+                notify_wifi_connect_fn=notify_geofence_wifi_connect,
+                notify_wifi_disconnect_fn=notify_geofence_wifi_disconnect,
+                notify_location_enter_fn=notify_geofence_location_enter,
+                notify_location_exit_fn=notify_geofence_location_exit,
+            )
+            if geofence_updates:
+                write_device_key_values(device_id, geofence_updates)
         call_log = body.get("callLog")
         if isinstance(call_log, list):
             record_call_log_entries(device_id, call_log)
@@ -2253,14 +2260,49 @@ def notify_device_offline(device_id, device):
     notify_device_status_change(device_id, device, "online", "offline")
 
 
-def notify_geofence_left(device_id, device, wifi_ssid):
-    office_ssid = read_device_geofence_config(device_id).get("officeWifiSsid", "")
+def notify_geofence_wifi_connect(device_id, device, ssid):
     send_admin_notification_email(
-        "Device Safety: device left office network",
-        "A device is no longer on the configured office Wi-Fi.\n\n"
+        "Device Safety: geofence Wi-Fi connected",
+        "A device connected to a configured geofence Wi-Fi network.\n\n"
         f"Device ID: {device_id}\n"
-        f"Expected SSID: {office_ssid}\n"
-        f"Current SSID: {wifi_ssid or 'unknown / disconnected'}\n"
+        f"SSID: {ssid}\n"
+        f"Model: {device.get('model', '')}\n"
+        f"Manufacturer: {device.get('manufacturer', '')}\n",
+    )
+
+
+def notify_geofence_wifi_disconnect(device_id, device, current_ssid, expected_ssid):
+    send_admin_notification_email(
+        "Device Safety: geofence Wi-Fi disconnected",
+        "A device left a configured geofence Wi-Fi network.\n\n"
+        f"Device ID: {device_id}\n"
+        f"Expected SSID: {expected_ssid}\n"
+        f"Current SSID: {current_ssid or 'unknown / disconnected'}\n"
+        f"Model: {device.get('model', '')}\n"
+        f"Manufacturer: {device.get('manufacturer', '')}\n",
+    )
+
+
+def notify_geofence_location_enter(device_id, device, zone, latitude, longitude):
+    send_admin_notification_email(
+        "Device Safety: entered geofence area",
+        "A device entered a configured GPS geofence zone.\n\n"
+        f"Device ID: {device_id}\n"
+        f"Zone: {zone.get('label', 'Zone')}\n"
+        f"Radius: {int(zone.get('radiusMeters', 200))} m\n"
+        f"Position: {latitude:.5f}, {longitude:.5f}\n"
+        f"Model: {device.get('model', '')}\n",
+    )
+
+
+def notify_geofence_location_exit(device_id, device, zone, latitude, longitude):
+    send_admin_notification_email(
+        "Device Safety: left geofence area",
+        "A device left a configured GPS geofence zone.\n\n"
+        f"Device ID: {device_id}\n"
+        f"Zone: {zone.get('label', 'Zone')}\n"
+        f"Radius: {int(zone.get('radiusMeters', 200))} m\n"
+        f"Position: {latitude:.5f}, {longitude:.5f}\n"
         f"Model: {device.get('model', '')}\n",
     )
 
@@ -2348,7 +2390,10 @@ def write_device_key_values(device_id, values):
 
 
 def read_device_geofence_config(device_id):
-    saved = read_device_key_values(device_id, default_geofence_config())
+    saved = read_device_key_values(device_id, {})
+    raw_json = saved.get(gf.GEOFENCE_CONFIG_KEY)
+    if raw_json:
+        return gf.normalize_geofence_config(raw_json)
     office_ssid = str(saved.get("officeWifiSsid") or "").strip()
     if office_ssid:
         alert_raw = saved.get("alertOnLeave")
@@ -2357,18 +2402,22 @@ def read_device_geofence_config(device_id):
             if alert_raw not in (None, "")
             else True
         )
-        return {"officeWifiSsid": office_ssid, "alertOnLeave": alert_on_leave}
-    return read_geofence_config()
+        return gf.normalize_geofence_config(
+            {"officeWifiSsid": office_ssid, "alertOnLeave": alert_on_leave, "alertOnEnter": True}
+        )
+    return gf.normalize_geofence_config(read_geofence_config())
 
 
 def write_device_geofence_config(device_id, config):
-    write_device_key_values(
-        device_id,
-        {
-            "officeWifiSsid": str(config.get("officeWifiSsid") or ""),
-            "alertOnLeave": "1" if config.get("alertOnLeave") else "0",
-        },
-    )
+    normalized = gf.normalize_geofence_config(config)
+    write_device_key_values(device_id, {gf.GEOFENCE_CONFIG_KEY: json.dumps(normalized)})
+
+
+def read_wifi_suggestions_for_device(device_id):
+    device = get_device_by_id(device_id) or {}
+    config = read_device_geofence_config(device_id)
+    saved = read_device_key_values(device_id, {})
+    return gf.merge_wifi_suggestions(device, config, saved.get(gf.NEARBY_WIFI_KEY))
 
 
 def read_device_wifi_profile_config(device_id):
@@ -2398,10 +2447,9 @@ def read_policy_for_device(device_id):
     if not device_id:
         return policy
     policy = dict(policy)
+    geofence = read_device_geofence_config(device_id)
     policy["deviceConfig"] = {
-        "geofence": {
-            "officeWifiSsid": read_device_geofence_config(device_id).get("officeWifiSsid", ""),
-        },
+        "geofence": geofence,
         "wifiProfile": read_device_wifi_profile_config(device_id),
     }
     return policy
@@ -3221,6 +3269,11 @@ class ApiHandler(BaseHTTPRequestHandler):
                 )
             )
             return
+        if path == "/devices/wifi-suggestions.json":
+            query = parse_qs(parsed_url.query)
+            device_id = str(query.get("deviceId", [""])[0]).strip()
+            self.send_json({"ok": True, "suggestions": read_wifi_suggestions_for_device(device_id)})
+            return
         if path == "/devices/security/requests.json":
             query = parse_qs(parsed_url.query)
             device_id = str(query.get("deviceId", [""])[0]).strip()
@@ -3414,6 +3467,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             "/app-release-center/register",
             "/devices/geofence",
             "/devices/wifi-profile",
+            "/devices/wifi-suggestions.json",
             "/enrollment-tokens",
             "/devices/send-command",
             "/devices/bulk-action",
@@ -4090,11 +4144,12 @@ class ApiHandler(BaseHTTPRequestHandler):
         if not device:
             self.send_html(render_not_found("Device not found"), status=404)
             return
-        config = {
-            "officeWifiSsid": str(body.get("officeWifiSsid", [""])[0]).strip(),
-            "alertOnLeave": str(body.get("alertOnLeave", [""])[0]) == "on",
-        }
-        write_device_geofence_config(device_id, config)
+        raw_json = str(body.get("geofenceJson", [""])[0]).strip()
+        try:
+            parsed = json.loads(raw_json) if raw_json else {}
+        except json.JSONDecodeError:
+            parsed = {}
+        write_device_geofence_config(device_id, parsed)
         self.send_html(
             render_device_geofence_page(
                 decorate_device(device),
@@ -5408,15 +5463,21 @@ def render_email_config(config, message="", alert_class="alert-info"):
 
 def render_device_geofence_page(device, config, message=""):
     device_id = escape(device.get("deviceId"))
+    raw_device_id = device.get("deviceId")
     message_html = f'<div class="alert alert-info">{escape(message)}</div>' if message else ""
-    alert_checked = "checked" if config.get("alertOnLeave") else ""
-    office_ssid = escape(config.get("officeWifiSsid"))
     current_ssid = escape(device.get("lastWifiSsid") or "-")
-    geofence_status = "Not configured"
-    if device.get("geofenceOk") is True:
-        geofence_status = "Inside office network"
-    elif device.get("geofenceOk") is False:
-        geofence_status = "Outside office network"
+    wifi_ok, matched_wifi = gf.evaluate_wifi_match(config, device.get("lastWifiSsid"))
+    loc_ok, zone_id = gf.evaluate_location_zone(config, device.get("lastLatitude"), device.get("lastLongitude"))
+    wifi_status = "Not configured"
+    if config.get("wifiNetworks"):
+        wifi_status = f"On monitored Wi-Fi ({matched_wifi})" if wifi_ok else "Not on monitored Wi-Fi"
+    loc_status = "Not configured"
+    if config.get("locationZones"):
+        zone = next((z for z in config.get("locationZones", []) if z.get("id") == zone_id), None)
+        label = zone.get("label") if zone else ""
+        loc_status = f"Inside {label}" if loc_ok else "Outside monitored areas"
+    suggestions = read_wifi_suggestions_for_device(raw_device_id)
+    datalist = gf_page.wifi_ssid_datalist_html(suggestions)
     content = f"""
     <div class="mb-3">{render_device_features_menu(device)}</div>
     <section class="admin-card p-4">
@@ -5427,35 +5488,69 @@ def render_device_geofence_page(device, config, message=""):
         </div>
         <div class="text-end">{render_device_status_badge(device)}</div>
       </div>
-      <p class="text-secondary">Current Wi-Fi: <strong>{current_ssid}</strong> · Status: <strong>{escape(geofence_status)}</strong></p>
+      <p class="text-secondary small mb-2">
+        Current Wi-Fi: <strong>{current_ssid}</strong> · Wi-Fi geofence: <strong>{escape(wifi_status)}</strong> · GPS geofence: <strong>{escape(loc_status)}</strong>
+      </p>
+      <p class="text-secondary small">SSID suggestions come from this device&apos;s last scan and connection. Enable Wi-Fi and Location on the device for fresh lists.</p>
       {message_html}
-      <form method="post" action="/devices/geofence">
+      {datalist}
+      <form method="post" action="/devices/geofence" id="geofence-form">
         <input type="hidden" name="deviceId" value="{device_id}">
-        <label class="form-label fw-bold" for="officeWifiSsid">Office Wi-Fi SSID</label>
-        <input class="form-control mb-3" id="officeWifiSsid" name="officeWifiSsid" value="{office_ssid}" placeholder="Office-LAN">
-        <div class="form-check mb-3">
-          <input class="form-check-input" id="alertOnLeave" name="alertOnLeave" type="checkbox" {alert_checked}>
-          <label class="form-check-label" for="alertOnLeave">Email admin when this device leaves this network</label>
+        <input type="hidden" name="geofenceJson" id="geofenceJson" value="">
+        <h3 class="h6 mt-2">Wi-Fi networks</h3>
+        <p class="text-secondary small">Add one or more SSIDs. Email alerts fire on connect and disconnect for each network.</p>
+        <div id="wifi-networks"></div>
+        <button type="button" class="btn btn-outline-secondary btn-sm mb-4" id="add-wifi-btn">+ Add Wi-Fi</button>
+        <h3 class="h6">GPS areas</h3>
+        <p class="text-secondary small">Add circular zones on the map. Email alerts fire when the device enters or leaves each area.</p>
+        <div id="location-zones"></div>
+        <button type="button" class="btn btn-outline-secondary btn-sm mb-3" id="add-zone-btn">+ Add location zone</button>
+        <div class="d-flex gap-2">
+          <button class="btn btn-primary" type="submit">Save Geofence</button>
         </div>
-        <button class="btn btn-primary" type="submit">Save Geofence</button>
       </form>
-    </section>"""
+    </section>
+    <div class="modal fade" id="geofence-map-modal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">Place geofence zone</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <p class="text-secondary small">Click the map or drag the pin to set the center. Adjust the slider to change the circular area.</p>
+            <div id="geofence-zone-map" class="mb-3"></div>
+            <label class="form-label fw-bold" for="geofence-radius-slider">Radius: <span id="geofence-radius-label">200 m</span></label>
+            <input type="range" class="form-range" id="geofence-radius-slider" min="25" max="5000" step="25" value="200">
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="button" class="btn btn-primary" id="geofence-map-apply">Use this area</button>
+          </div>
+        </div>
+      </div>
+    </div>"""
     return render_admin_page(
         "Device Geofence",
-        "Per-device office Wi-Fi SSID used to flag when this phone leaves the network.",
+        "Per-device Wi-Fi and GPS geofence rules with email alerts on connect, disconnect, enter, and exit.",
         content,
         active_path="/",
         fluid=False,
+        extra_head=gf_page.geofence_leaflet_head(),
+        extra_scripts=gf_page.geofence_page_scripts(config, device, suggestions),
     )
 
 
 def render_device_wifi_profile_page(device, config, message="", alert_class="alert-info"):
     device_id = escape(device.get("deviceId"))
+    raw_device_id = device.get("deviceId")
     message_html = f'<div class="alert {alert_class}">{escape(message)}</div>' if message else ""
     password_placeholder = "Leave blank to keep existing password" if config.get("password") else "Wi-Fi password"
     wpa_selected = "selected" if config.get("security", "WPA") == "WPA" else ""
     open_selected = "selected" if config.get("security") == "OPEN" else ""
     ssid = escape(config.get("ssid"))
+    suggestions = read_wifi_suggestions_for_device(raw_device_id)
+    datalist = gf_page.wifi_ssid_datalist_html(suggestions, list_id="wifi-profile-ssid-suggestions")
     content = f"""
     <div class="mb-3">{render_device_features_menu(device)}</div>
     <section class="admin-card p-4">
@@ -5467,10 +5562,12 @@ def render_device_wifi_profile_page(device, config, message="", alert_class="ale
         <div class="text-end">{render_device_status_badge(device)}</div>
       </div>
       {message_html}
+      {datalist}
+      <p class="text-secondary small">Pick an SSID from the device scan list or type your office router name manually.</p>
       <form method="post" action="/devices/wifi-profile">
         <input type="hidden" name="deviceId" value="{device_id}">
         <label class="form-label fw-bold" for="ssid">SSID</label>
-        <input class="form-control mb-3" id="ssid" name="ssid" value="{ssid}" placeholder="Office-LAN">
+        <input class="form-control mb-3" id="ssid" name="ssid" list="wifi-profile-ssid-suggestions" value="{ssid}" placeholder="Office-LAN">
         <label class="form-label fw-bold" for="password">Password</label>
         <input class="form-control mb-3" id="password" name="password" type="password" placeholder="{escape(password_placeholder)}">
         <label class="form-label fw-bold" for="security">Security</label>
