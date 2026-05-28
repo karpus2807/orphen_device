@@ -32,6 +32,8 @@ import security_control
 
 WIFI_SAVED_PROFILES_KEY = "wifi_saved_profiles_json"
 WIFI_SCAN_AT_KEY = "wifi_scan_at"
+STATUS_EMAIL_STATE_KEY = "status_email_state_json"
+STATUS_EMAIL_COOLDOWN_SECONDS = 30 * 60
 DATA_FILE = ROOT / "data" / "devices.json"
 CONFIG_FILE = ROOT / "data" / "server_config.json"
 HEARTBEAT_FILE = ROOT / "data" / "heartbeats.json"
@@ -2236,6 +2238,10 @@ def notify_device_checkin(device_id, body):
 def notify_device_status_change(device_id, device, previous_status, current_status):
     if not previous_status or previous_status == current_status:
         return
+    if current_status not in {"online", "offline"}:
+        return
+    if not should_send_status_email(device_id, current_status):
+        return
     model = device.get("model", "")
     manufacturer = device.get("manufacturer", "")
     last_seen = format_timestamp(device.get("lastSeenAt"))
@@ -2258,14 +2264,6 @@ def notify_device_status_change(device_id, device, previous_status, current_stat
             f"Previous status: {previous_status}\n"
             f"Last seen: {last_seen}\n",
         ),
-        "unregistered": (
-            "Device Safety: device is unregistered",
-            "A device is no longer registered on the server.\n\n"
-            f"Device ID: {device_id}\n"
-            f"Model: {model}\n"
-            f"Manufacturer: {manufacturer}\n"
-            f"Previous status: {previous_status}\n",
-        ),
     }
     template = templates.get(current_status)
     if template:
@@ -2275,6 +2273,24 @@ def notify_device_status_change(device_id, device, previous_status, current_stat
 
 def notify_device_offline(device_id, device):
     notify_device_status_change(device_id, device, "online", "offline")
+
+
+def should_send_status_email(device_id, target_status):
+    now = int(time.time())
+    saved = read_device_key_values(device_id, {})
+    raw_state = str(saved.get(STATUS_EMAIL_STATE_KEY) or "").strip()
+    try:
+        state = json.loads(raw_state) if raw_state else {}
+    except (json.JSONDecodeError, TypeError, ValueError):
+        state = {}
+    last_status = str(state.get("lastStatus") or "")
+    last_sent = int(state.get("lastSentAt") or 0)
+    if last_status == target_status and (now - last_sent) < STATUS_EMAIL_COOLDOWN_SECONDS:
+        return False
+    state["lastStatus"] = target_status
+    state["lastSentAt"] = now
+    write_device_key_values(device_id, {STATUS_EMAIL_STATE_KEY: json.dumps(state)})
+    return True
 
 
 def notify_geofence_wifi_connect(device_id, device, ssid):
