@@ -84,6 +84,14 @@ CREATE TABLE IF NOT EXISTS wifi_profile_settings (
     value TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS device_settings (
+    device_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (device_id, key),
+    FOREIGN KEY (device_id) REFERENCES devices(device_id)
+);
+
 CREATE TABLE IF NOT EXISTS password_resets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL,

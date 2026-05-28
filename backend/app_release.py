@@ -418,15 +418,96 @@ def register_release(connection, package_name, app_label, version_name, version_
     )
 
 
-def list_releases(connection, package_name=""):
+def list_releases(connection, package_name="", limit=200):
     query = "SELECT * FROM app_releases WHERE 1=1"
     params = []
     if package_name:
         query += " AND package_name = ?"
         params.append(package_name)
-    query += " ORDER BY created_at DESC LIMIT 50"
+    query += " ORDER BY version_code DESC, created_at DESC"
+    if limit:
+        query += f" LIMIT {int(limit)}"
     rows = connection.execute(query, params).fetchall()
     return [dict(row) for row in rows]
+
+
+def get_release_by_id(connection, release_id):
+    row = connection.execute(
+        "SELECT * FROM app_releases WHERE id = ?",
+        (int(release_id),),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _apk_file_in_use(connection, apk_filename, exclude_release_id=None):
+    query = "SELECT COUNT(*) AS cnt FROM app_releases WHERE apk_filename = ?"
+    params = [apk_filename]
+    if exclude_release_id is not None:
+        query += " AND id != ?"
+        params.append(int(exclude_release_id))
+    row = connection.execute(query, params).fetchone()
+    return int(row["cnt"] or 0) > 0
+
+
+def _delete_apk_file_if_unused(connection, apk_filename, exclude_release_id=None):
+    if not apk_filename:
+        return False
+    if _apk_file_in_use(connection, apk_filename, exclude_release_id=exclude_release_id):
+        return False
+    apk_path = APK_DIR / apk_filename
+    if apk_path.is_file():
+        apk_path.unlink()
+        return True
+    return False
+
+
+def delete_releases(connection, release_ids):
+    deleted = []
+    errors = []
+    for raw_id in release_ids:
+        try:
+            release_id = int(raw_id)
+        except (TypeError, ValueError):
+            errors.append(f"Invalid release id: {raw_id}")
+            continue
+        row = get_release_by_id(connection, release_id)
+        if not row:
+            errors.append(f"Release #{release_id} not found")
+            continue
+        connection.execute("DELETE FROM app_releases WHERE id = ?", (release_id,))
+        removed_file = _delete_apk_file_if_unused(connection, row.get("apk_filename"), exclude_release_id=release_id)
+        deleted.append(
+            {
+                "id": release_id,
+                "version": f"{row.get('version_name')} ({row.get('version_code')})",
+                "apkRemoved": removed_file,
+            }
+        )
+    return deleted, errors
+
+
+def push_release_to_devices(connection, release_id, server_host, server_port, create_command_fn, read_devices_fn):
+    row = get_release_by_id(connection, release_id)
+    if not row:
+        return [], "Release not found"
+    apk_path = APK_DIR / str(row.get("apk_filename") or "")
+    if not apk_path.is_file():
+        return [], f"APK file missing on server: {apk_path.name}"
+    payload = build_ota_payload_for_release(
+        server_host,
+        server_port,
+        row["version_name"],
+        row["version_code"],
+        row["release_notes"],
+        row["apk_filename"],
+    )
+    queued = queue_push_to_devices(
+        create_command_fn,
+        read_devices_fn,
+        row["package_name"],
+        payload,
+    )
+    return queued, None
 
 
 def build_ota_payload_for_release(server_host, server_port, version_name, version_code, release_notes, apk_filename):

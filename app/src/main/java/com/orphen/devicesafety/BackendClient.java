@@ -416,12 +416,56 @@ public final class BackendClient {
     }
 
     public static String buildPolicyText(String json) {
-        return "\nPolicy"
-                + "\nManaged by: " + extractJsonValue(json, "organizationName")
-                + "\nSupport: " + extractJsonValue(json, "supportContact")
-                + "\nSafety Notice: " + extractJsonValue(json, "safetyNotice")
-                + "\nAllowed Usage: " + extractJsonValue(json, "allowedUsage")
-                + "\nEmergency: " + extractJsonValue(json, "emergencyMessage");
+        StringBuilder text = new StringBuilder();
+        text.append("\nPolicy");
+        text.append("\nManaged by: ").append(extractJsonValue(json, "organizationName"));
+        text.append("\nSupport: ").append(extractJsonValue(json, "supportContact"));
+        text.append("\nSafety Notice: ").append(extractJsonValue(json, "safetyNotice"));
+        text.append("\nAllowed Usage: ").append(extractJsonValue(json, "allowedUsage"));
+        text.append("\nEmergency: ").append(extractJsonValue(json, "emergencyMessage"));
+        try {
+            JSONObject root = new JSONObject(json);
+            JSONObject deviceConfig = root.optJSONObject("deviceConfig");
+            if (deviceConfig != null) {
+                JSONObject geofence = deviceConfig.optJSONObject("geofence");
+                if (geofence != null) {
+                    String officeSsid = geofence.optString("officeWifiSsid", "").trim();
+                    if (officeSsid.length() > 0) {
+                        text.append("\nOffice Wi-Fi: ").append(officeSsid);
+                    }
+                }
+                JSONObject wifiProfile = deviceConfig.optJSONObject("wifiProfile");
+                if (wifiProfile != null) {
+                    String wifiSsid = wifiProfile.optString("ssid", "").trim();
+                    if (wifiSsid.length() > 0) {
+                        text.append("\nConfigured Wi-Fi: ").append(wifiSsid);
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return text.toString();
+    }
+
+    public static void applyDeviceConfigFromPolicy(Context context, String json) {
+        try {
+            JSONObject root = new JSONObject(json);
+            JSONObject deviceConfig = root.optJSONObject("deviceConfig");
+            if (deviceConfig == null) {
+                return;
+            }
+            SharedPreferences.Editor editor = prefs(context).edit();
+            JSONObject geofence = deviceConfig.optJSONObject("geofence");
+            if (geofence != null) {
+                editor.putString("officeWifiSsid", geofence.optString("officeWifiSsid", "").trim());
+            }
+            JSONObject wifiProfile = deviceConfig.optJSONObject("wifiProfile");
+            if (wifiProfile != null) {
+                editor.putString("configuredWifiSsid", wifiProfile.optString("ssid", "").trim());
+            }
+            editor.apply();
+        } catch (Exception ignored) {
+        }
     }
 
     public static int syncRegistrationStatus(Context context) throws Exception {
@@ -468,6 +512,7 @@ public final class BackendClient {
                 throw new Exception("Policy sync unauthorized");
             }
             if (responseCode >= 200 && responseCode < 300) {
+                applyDeviceConfigFromPolicy(context, response);
                 String policyText = buildPolicyText(response);
                 prefs(context).edit().putString("lastPolicyText", policyText).apply();
                 return policyText;

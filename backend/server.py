@@ -911,7 +911,7 @@ def update_device_admin_status(device_id, active):
 
 def update_device_telemetry_from_body(device_id, body):
     devices = read_devices()
-    geofence_config = read_geofence_config()
+    geofence_config = read_device_geofence_config(device_id)
     office_ssid = str(geofence_config.get("officeWifiSsid", "")).strip()
     wifi_ssid = str(body.get("wifiSsid", "")).strip()
     usage_summary = body.get("usageSummary")
@@ -1896,7 +1896,9 @@ def perform_bulk_device_action(device_ids, action, payload="", group_name=""):
                 if action == "push_app_update":
                     payload = json.dumps(build_ota_payload())
                 if action == "push_wifi_profile" and not str(payload).strip():
-                    wifi_config = read_wifi_profile_config()
+                    wifi_config = read_device_wifi_profile_config(device_id)
+                    if not str(wifi_config.get("ssid", "")).strip():
+                        raise RuntimeError("Save a Wi-Fi profile for this device first")
                     payload = json.dumps(wifi_config)
                 if action == "start_audio_stream":
                     audio_stream.request_stream(device_id, True)
@@ -2250,7 +2252,7 @@ def notify_device_offline(device_id, device):
 
 
 def notify_geofence_left(device_id, device, wifi_ssid):
-    office_ssid = read_geofence_config().get("officeWifiSsid", "")
+    office_ssid = read_device_geofence_config(device_id).get("officeWifiSsid", "")
     send_admin_notification_email(
         "Device Safety: device left office network",
         "A device is no longer on the configured office Wi-Fi.\n\n"
@@ -2318,6 +2320,89 @@ def read_wifi_profile_config():
 
 def write_wifi_profile_config(config):
     write_key_values("wifi_profile_settings", config)
+
+
+def read_device_key_values(device_id, defaults):
+    values = dict(defaults)
+    with db_connect() as connection:
+        rows = connection.execute(
+            "SELECT key, value FROM device_settings WHERE device_id = ?",
+            (device_id,),
+        ).fetchall()
+    for row in rows:
+        values[row["key"]] = row["value"]
+    return values
+
+
+def write_device_key_values(device_id, values):
+    with db_connect() as connection:
+        for key, value in values.items():
+            connection.execute(
+                "INSERT INTO device_settings (device_id, key, value) VALUES (?, ?, ?) "
+                "ON CONFLICT(device_id, key) DO UPDATE SET value = excluded.value",
+                (device_id, key, str(value)),
+            )
+        connection.commit()
+
+
+def read_device_geofence_config(device_id):
+    saved = read_device_key_values(device_id, default_geofence_config())
+    office_ssid = str(saved.get("officeWifiSsid") or "").strip()
+    if office_ssid:
+        alert_raw = saved.get("alertOnLeave")
+        alert_on_leave = (
+            str(alert_raw).lower() in {"1", "true", "yes", "on"}
+            if alert_raw not in (None, "")
+            else True
+        )
+        return {"officeWifiSsid": office_ssid, "alertOnLeave": alert_on_leave}
+    return read_geofence_config()
+
+
+def write_device_geofence_config(device_id, config):
+    write_device_key_values(
+        device_id,
+        {
+            "officeWifiSsid": str(config.get("officeWifiSsid") or ""),
+            "alertOnLeave": "1" if config.get("alertOnLeave") else "0",
+        },
+    )
+
+
+def read_device_wifi_profile_config(device_id):
+    saved = read_device_key_values(device_id, default_wifi_profile_config())
+    if str(saved.get("ssid") or "").strip():
+        return {
+            "ssid": str(saved.get("ssid") or ""),
+            "password": str(saved.get("password") or ""),
+            "security": str(saved.get("security") or "WPA"),
+        }
+    return read_wifi_profile_config()
+
+
+def write_device_wifi_profile_config(device_id, config):
+    write_device_key_values(
+        device_id,
+        {
+            "ssid": str(config.get("ssid") or ""),
+            "password": str(config.get("password") or ""),
+            "security": str(config.get("security") or "WPA"),
+        },
+    )
+
+
+def read_policy_for_device(device_id):
+    policy = read_policy()
+    if not device_id:
+        return policy
+    policy = dict(policy)
+    policy["deviceConfig"] = {
+        "geofence": {
+            "officeWifiSsid": read_device_geofence_config(device_id).get("officeWifiSsid", ""),
+        },
+        "wifiProfile": read_device_wifi_profile_config(device_id),
+    }
+    return policy
 
 
 def build_ota_payload():
@@ -2515,16 +2600,22 @@ class ApiHandler(BaseHTTPRequestHandler):
             self.send_html(render_email_config(read_smtp_config()))
             return
         if path == "/geofence-config":
-            self.send_html(render_geofence_config(read_geofence_config()))
+            query = parse_qs(parsed_url.query)
+            device_id = str(query.get("deviceId", [""])[0]).strip()
+            target = f"/devices/geofence?deviceId={device_id}" if device_id else "/"
+            self.send_redirect(target)
             return
         if path == "/ota-config":
-            self.send_html(render_ota_config(read_ota_config(), read_server_config()))
+            self.send_redirect("/app-release-center")
             return
         if path == "/app-release-center":
             self.send_html(render_app_release_center())
             return
         if path == "/wifi-profile-config":
-            self.send_html(render_wifi_profile_config(read_wifi_profile_config()))
+            query = parse_qs(parsed_url.query)
+            device_id = str(query.get("deviceId", [""])[0]).strip()
+            target = f"/devices/wifi-profile?deviceId={device_id}" if device_id else "/"
+            self.send_redirect(target)
             return
         if path.startswith("/apk/"):
             self.serve_apk(path)
@@ -2558,7 +2649,9 @@ class ApiHandler(BaseHTTPRequestHandler):
             if not self.is_authenticated() and not self.request_has_valid_device_token():
                 self.send_json({"error": "unauthorized_device"}, status=401)
                 return
-            self.send_json(read_policy())
+            query = parse_qs(parsed_url.query)
+            device_id = str(query.get("deviceId", [""])[0]).strip()
+            self.send_json(read_policy_for_device(device_id))
             return
         if path == "/health":
             self.send_json({"ok": True, "service": "device-safety-backend"})
@@ -3098,6 +3191,34 @@ class ApiHandler(BaseHTTPRequestHandler):
                 requests = security_control.list_requests(connection, device_id)
             self.send_html(render_device_security_page(decorate_device(device), requests))
             return
+        if path == "/devices/geofence":
+            query = parse_qs(parsed_url.query)
+            device_id = str(query.get("deviceId", [""])[0]).strip()
+            device = get_device_by_id(device_id)
+            if not device:
+                self.send_html(render_not_found("Device not found"), status=404)
+                return
+            self.send_html(
+                render_device_geofence_page(
+                    decorate_device(device),
+                    read_device_geofence_config(device_id),
+                )
+            )
+            return
+        if path == "/devices/wifi-profile":
+            query = parse_qs(parsed_url.query)
+            device_id = str(query.get("deviceId", [""])[0]).strip()
+            device = get_device_by_id(device_id)
+            if not device:
+                self.send_html(render_not_found("Device not found"), status=404)
+                return
+            self.send_html(
+                render_device_wifi_profile_page(
+                    decorate_device(device),
+                    read_device_wifi_profile_config(device_id),
+                )
+            )
+            return
         if path == "/devices/security/requests.json":
             query = parse_qs(parsed_url.query)
             device_id = str(query.get("deviceId", [""])[0]).strip()
@@ -3199,10 +3320,16 @@ class ApiHandler(BaseHTTPRequestHandler):
             self.send_test_email_config()
             return
         if path == "/geofence-config":
-            self.save_geofence_config()
+            self.send_redirect("/")
             return
         if path == "/ota-config":
-            self.save_ota_config()
+            self.send_redirect("/app-release-center")
+            return
+        if path == "/devices/geofence":
+            self.save_device_geofence_config()
+            return
+        if path == "/devices/wifi-profile":
+            self.save_device_wifi_profile_config()
             return
         if path == "/app-release-center/build":
             self.app_release_build()
@@ -3216,8 +3343,14 @@ class ApiHandler(BaseHTTPRequestHandler):
         if path == "/app-release-center/register":
             self.app_release_register()
             return
+        if path == "/app-release-center/push-release":
+            self.app_release_push_release()
+            return
+        if path == "/app-release-center/delete-releases":
+            self.app_release_delete_releases()
+            return
         if path == "/wifi-profile-config":
-            self.save_wifi_profile_config()
+            self.send_redirect("/")
             return
         if path == "/enrollment-tokens":
             self.admin_register_device()
@@ -3266,14 +3399,15 @@ class ApiHandler(BaseHTTPRequestHandler):
             "/policy-config",
             "/email-config",
             "/email-config/test",
-            "/geofence-config",
-            "/ota-config",
             "/app-release-center",
             "/app-release-center/build",
             "/app-release-center/build-push",
             "/app-release-center/push",
+            "/app-release-center/push-release",
+            "/app-release-center/delete-releases",
             "/app-release-center/register",
-            "/wifi-profile-config",
+            "/devices/geofence",
+            "/devices/wifi-profile",
             "/enrollment-tokens",
             "/devices/send-command",
             "/devices/bulk-action",
@@ -3468,7 +3602,14 @@ class ApiHandler(BaseHTTPRequestHandler):
         if command_type == "push_app_update":
             payload = json.dumps(build_ota_payload())
         if command_type == "push_wifi_profile" and not payload:
-            payload = json.dumps(read_wifi_profile_config())
+            wifi_config = read_device_wifi_profile_config(device_id)
+            if not str(wifi_config.get("ssid", "")).strip():
+                self.send_html(
+                    render_not_found("Save a Wi-Fi profile for this device before pushing."),
+                    status=400,
+                )
+                return
+            payload = json.dumps(wifi_config)
         if not get_device_by_id(device_id):
             self.send_html(render_not_found("Device not found"), status=404)
             return
@@ -3490,6 +3631,14 @@ class ApiHandler(BaseHTTPRequestHandler):
             with db_connect() as connection:
                 requests = security_control.list_requests(connection, device_id)
             return render_device_security_page(device, requests, message)
+        if return_to.startswith("/devices/geofence") and device:
+            return render_device_geofence_page(device, read_device_geofence_config(device_id), message)
+        if return_to.startswith("/devices/wifi-profile") and device:
+            return render_device_wifi_profile_page(
+                device,
+                read_device_wifi_profile_config(device_id),
+                message,
+            )
         return render_device_detail(device, get_device_events(device_id), read_device_commands(device_id), message)
 
     def admin_bulk_action(self):
@@ -3924,24 +4073,55 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def save_geofence_config(self):
+    def save_device_geofence_config(self):
         body = self.read_form_body()
+        device_id = str(body.get("deviceId", [""])[0]).strip()
+        device = get_device_by_id(device_id)
+        if not device:
+            self.send_html(render_not_found("Device not found"), status=404)
+            return
         config = {
             "officeWifiSsid": str(body.get("officeWifiSsid", [""])[0]).strip(),
             "alertOnLeave": str(body.get("alertOnLeave", [""])[0]) == "on",
         }
-        write_geofence_config(config)
-        self.send_html(render_geofence_config(read_geofence_config(), "Geofence settings saved."))
+        write_device_geofence_config(device_id, config)
+        self.send_html(
+            render_device_geofence_page(
+                decorate_device(device),
+                read_device_geofence_config(device_id),
+                "Geofence settings saved for this device.",
+            )
+        )
 
-    def save_ota_config(self):
+    def save_device_wifi_profile_config(self):
         body = self.read_form_body()
+        device_id = str(body.get("deviceId", [""])[0]).strip()
+        device = get_device_by_id(device_id)
+        if not device:
+            self.send_html(render_not_found("Device not found"), status=404)
+            return
+        existing = read_device_wifi_profile_config(device_id)
+        password = str(body.get("password", [""])[0])
         config = {
-            "version": str(body.get("version", [""])[0]).strip(),
-            "apkUrl": str(body.get("apkUrl", [""])[0]).strip(),
-            "releaseNotes": str(body.get("releaseNotes", [""])[0]).strip(),
+            "ssid": str(body.get("ssid", [""])[0]).strip(),
+            "password": password if password else existing.get("password", ""),
+            "security": str(body.get("security", ["WPA"])[0]).strip() or "WPA",
         }
-        write_ota_config(config)
-        self.send_html(render_ota_config(read_ota_config(), read_server_config(), "OTA settings saved."))
+        write_device_wifi_profile_config(device_id, config)
+        message = "Wi-Fi profile saved for this device."
+        if str(body.get("pushNow", [""])[0]) == "on":
+            if not config.get("ssid"):
+                message = "SSID is required before pushing to the device."
+            else:
+                create_device_command(device_id, "push_wifi_profile", json.dumps(config))
+                message = "Wi-Fi profile saved and push command queued."
+        self.send_html(
+            render_device_wifi_profile_page(
+                decorate_device(device),
+                read_device_wifi_profile_config(device_id),
+                message,
+            )
+        )
 
     def app_release_build(self):
         body = self.read_form_body()
@@ -4056,6 +4236,76 @@ class ApiHandler(BaseHTTPRequestHandler):
             render_app_release_center(f"Queued push_app_update for {len(queued)} device(s).")
         )
 
+    def app_release_push_release(self):
+        body = self.read_form_body()
+        release_id = str(body.get("releaseId", [""])[0]).strip()
+        if not release_id.isdigit():
+            self.send_html(render_app_release_center("Invalid release selected."))
+            return
+        server = read_server_config()
+        with db_connect() as connection:
+            queued, error = app_release.push_release_to_devices(
+                connection,
+                release_id,
+                server["host"],
+                server["port"],
+                create_device_command,
+                read_devices,
+            )
+            connection.commit()
+        if error:
+            self.send_html(render_app_release_center(error))
+            return
+        row = None
+        with db_connect() as connection:
+            row = app_release.get_release_by_id(connection, release_id)
+        if row:
+            payload = app_release.build_ota_payload_for_release(
+                server["host"],
+                server["port"],
+                row["version_name"],
+                row["version_code"],
+                row["release_notes"],
+                row["apk_filename"],
+            )
+            write_ota_config(
+                {
+                    "version": row["version_name"],
+                    "apkUrl": payload["apkUrl"],
+                    "releaseNotes": row["release_notes"],
+                }
+            )
+        self.send_html(
+            render_app_release_center(
+                f"Pushed v{row['version_name']} ({row['version_code']}) to {len(queued)} device(s)."
+                if row
+                else f"Queued push_app_update for {len(queued)} device(s)."
+            )
+        )
+
+    def app_release_delete_releases(self):
+        body = self.read_form_body()
+        release_ids = body.get("releaseIds") or []
+        if isinstance(release_ids, str):
+            release_ids = [release_ids]
+        release_ids = [str(value).strip() for value in release_ids if str(value).strip()]
+        if not release_ids:
+            self.send_html(render_app_release_center("Select at least one release to remove."))
+            return
+        with db_connect() as connection:
+            deleted, errors = app_release.delete_releases(connection, release_ids)
+            connection.commit()
+        parts = []
+        if deleted:
+            labels = ", ".join(item["version"] for item in deleted)
+            apk_removed = sum(1 for item in deleted if item.get("apkRemoved"))
+            parts.append(f"Removed {len(deleted)} release(s): {labels}.")
+            if apk_removed:
+                parts.append(f"Deleted {apk_removed} APK file(s) from server disk.")
+        if errors:
+            parts.append("Errors: " + "; ".join(errors))
+        self.send_html(render_app_release_center(" ".join(parts) or "Nothing removed."))
+
     def send_update_manager_catalog(self):
         server = read_server_config()
         catalog = []
@@ -4079,18 +4329,6 @@ class ApiHandler(BaseHTTPRequestHandler):
                         }
                     )
         self.send_json({"ok": True, "releases": catalog, "serverTime": int(time.time())})
-
-    def save_wifi_profile_config(self):
-        body = self.read_form_body()
-        existing = read_wifi_profile_config()
-        password = str(body.get("password", [""])[0])
-        config = {
-            "ssid": str(body.get("ssid", [""])[0]).strip(),
-            "password": password if password else existing.get("password", ""),
-            "security": str(body.get("security", ["WPA"])[0]).strip() or "WPA",
-        }
-        write_wifi_profile_config(config)
-        self.send_html(render_wifi_profile_config(read_wifi_profile_config(), "Wi-Fi profile saved."))
 
     def register_device(self):
         body = self.read_json_body()
@@ -4549,12 +4787,9 @@ ADMIN_NAV_GROUPS = (
     },
     {
         "label": "Device Config",
-        "paths": ("/policy-config", "/geofence-config", "/wifi-profile-config", "/ota-config"),
+        "paths": ("/policy-config", "/app-release-center"),
         "items": (
             ("/policy-config", "Policy"),
-            ("/geofence-config", "Geofence"),
-            ("/wifi-profile-config", "Wi-Fi Profile"),
-            ("/ota-config", "OTA Updates"),
             ("/app-release-center", "App Build & OTA"),
         ),
     },
@@ -4570,7 +4805,7 @@ ADMIN_NAV_GROUPS = (
 
 
 def resolve_admin_active_path(path):
-    if path.startswith("/devices/detail") or path.startswith("/devices/location") or path.startswith("/devices/call-log") or path.startswith("/devices/sms-history") or path.startswith("/devices/contacts") or path.startswith("/devices/notifications") or path.startswith("/devices/audio") or path.startswith("/devices/files") or path.startswith("/devices/shell") or path.startswith("/devices/communications") or path.startswith("/devices/security"):
+    if path.startswith("/devices/detail") or path.startswith("/devices/location") or path.startswith("/devices/call-log") or path.startswith("/devices/sms-history") or path.startswith("/devices/contacts") or path.startswith("/devices/notifications") or path.startswith("/devices/audio") or path.startswith("/devices/files") or path.startswith("/devices/shell") or path.startswith("/devices/communications") or path.startswith("/devices/security") or path.startswith("/devices/geofence") or path.startswith("/devices/wifi-profile"):
         return "/"
     return path
 
@@ -5149,55 +5384,90 @@ def render_email_config(config, message="", alert_class="alert-info"):
     )
 
 
-def render_geofence_config(config, message=""):
+def render_device_geofence_page(device, config, message=""):
+    device_id = escape(device.get("deviceId"))
     message_html = f'<div class="alert alert-info">{escape(message)}</div>' if message else ""
     alert_checked = "checked" if config.get("alertOnLeave") else ""
     office_ssid = escape(config.get("officeWifiSsid"))
-    content = (
-        f'<section class="admin-card p-4">{message_html}'
-        '<form method="post" action="/geofence-config">'
-        '<label class="form-label fw-bold" for="officeWifiSsid">Office Wi-Fi SSID</label>'
-        f'<input class="form-control mb-3" id="officeWifiSsid" name="officeWifiSsid" value="{office_ssid}" placeholder="Office-LAN">'
-        f'<div class="form-check mb-3"><input class="form-check-input" id="alertOnLeave" name="alertOnLeave" type="checkbox" {alert_checked}>'
-        '<label class="form-check-label" for="alertOnLeave">Email admin when a device leaves this network</label></div>'
-        '<button class="btn btn-primary" type="submit">Save Geofence Settings</button>'
-        "</form></section>"
-    )
+    current_ssid = escape(device.get("lastWifiSsid") or "-")
+    geofence_status = "Not configured"
+    if device.get("geofenceOk") is True:
+        geofence_status = "Inside office network"
+    elif device.get("geofenceOk") is False:
+        geofence_status = "Outside office network"
+    content = f"""
+    <div class="mb-3">{render_device_features_menu(device)}</div>
+    <section class="admin-card p-4">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3">
+        <div>
+          <h2 class="h5 mb-1">Geofence (this device)</h2>
+          <div class="text-secondary device-id">{device_id} · {escape(device.get("manufacturer"))} {escape(device.get("model"))}</div>
+        </div>
+        <div class="text-end">{render_device_status_badge(device)}</div>
+      </div>
+      <p class="text-secondary">Current Wi-Fi: <strong>{current_ssid}</strong> · Status: <strong>{escape(geofence_status)}</strong></p>
+      {message_html}
+      <form method="post" action="/devices/geofence">
+        <input type="hidden" name="deviceId" value="{device_id}">
+        <label class="form-label fw-bold" for="officeWifiSsid">Office Wi-Fi SSID</label>
+        <input class="form-control mb-3" id="officeWifiSsid" name="officeWifiSsid" value="{office_ssid}" placeholder="Office-LAN">
+        <div class="form-check mb-3">
+          <input class="form-check-input" id="alertOnLeave" name="alertOnLeave" type="checkbox" {alert_checked}>
+          <label class="form-check-label" for="alertOnLeave">Email admin when this device leaves this network</label>
+        </div>
+        <button class="btn btn-primary" type="submit">Save Geofence</button>
+      </form>
+    </section>"""
     return render_admin_page(
-        "Geofence Config",
-        "Flag devices that leave the office Wi-Fi SSID and optionally email the admin.",
+        "Device Geofence",
+        "Per-device office Wi-Fi SSID used to flag when this phone leaves the network.",
         content,
-        active_path="/geofence-config",
+        active_path="/",
         fluid=False,
     )
 
 
-def render_ota_config(config, server_config, message=""):
+def render_device_wifi_profile_page(device, config, message=""):
+    device_id = escape(device.get("deviceId"))
     message_html = f'<div class="alert alert-info">{escape(message)}</div>' if message else ""
-    default_apk = f"http://{server_config.get('host')}:{server_config.get('port')}/apk/dsm.apk"
-    version = escape(config.get("version"))
-    apk_url = escape(config.get("apkUrl"))
-    release_notes = escape(config.get("releaseNotes"))
-    default_apk_html = escape(default_apk)
-    content = (
-        f'<section class="admin-card p-4">{message_html}'
-        '<form method="post" action="/ota-config">'
-        '<label class="form-label fw-bold" for="version">Version label</label>'
-        f'<input class="form-control mb-3" id="version" name="version" value="{version}" placeholder="1.1.0">'
-        '<label class="form-label fw-bold" for="apkUrl">APK URL</label>'
-        f'<input class="form-control mb-3" id="apkUrl" name="apkUrl" value="{apk_url}" placeholder="{default_apk_html}">'
-        '<label class="form-label fw-bold" for="releaseNotes">Release notes</label>'
-        f'<textarea class="form-control mb-3" id="releaseNotes" name="releaseNotes" rows="3">{release_notes}</textarea>'
-        '<button class="btn btn-primary" type="submit">Save OTA Settings</button>'
-        "</form>"
-        f'<p class="text-secondary mt-3 mb-0">Default APK host path: <code>{default_apk_html}</code></p>'
-        "</section>"
-    )
+    password_placeholder = "Leave blank to keep existing password" if config.get("password") else "Wi-Fi password"
+    wpa_selected = "selected" if config.get("security", "WPA") == "WPA" else ""
+    open_selected = "selected" if config.get("security") == "OPEN" else ""
+    ssid = escape(config.get("ssid"))
+    content = f"""
+    <div class="mb-3">{render_device_features_menu(device)}</div>
+    <section class="admin-card p-4">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3">
+        <div>
+          <h2 class="h5 mb-1">Wi-Fi Profile (this device)</h2>
+          <div class="text-secondary device-id">{device_id} · {escape(device.get("manufacturer"))} {escape(device.get("model"))}</div>
+        </div>
+        <div class="text-end">{render_device_status_badge(device)}</div>
+      </div>
+      {message_html}
+      <form method="post" action="/devices/wifi-profile">
+        <input type="hidden" name="deviceId" value="{device_id}">
+        <label class="form-label fw-bold" for="ssid">SSID</label>
+        <input class="form-control mb-3" id="ssid" name="ssid" value="{ssid}" placeholder="Office-LAN">
+        <label class="form-label fw-bold" for="password">Password</label>
+        <input class="form-control mb-3" id="password" name="password" type="password" placeholder="{escape(password_placeholder)}">
+        <label class="form-label fw-bold" for="security">Security</label>
+        <select class="form-select mb-3" id="security" name="security">
+          <option value="WPA" {wpa_selected}>WPA/WPA2</option>
+          <option value="OPEN" {open_selected}>Open network</option>
+        </select>
+        <div class="form-check mb-3">
+          <input class="form-check-input" id="pushNow" name="pushNow" type="checkbox" checked>
+          <label class="form-check-label" for="pushNow">Push to device after save</label>
+        </div>
+        <button class="btn btn-primary" type="submit">Save Wi-Fi Profile</button>
+      </form>
+    </section>"""
     return render_admin_page(
-        "OTA App Update",
-        "Push a new APK version to enrolled devices with the Push App Update command.",
+        "Device Wi-Fi Profile",
+        "SSID and password pushed to this device with Push Wi-Fi Profile.",
         content,
-        active_path="/ota-config",
+        active_path="/",
         fluid=False,
     )
 
@@ -5241,17 +5511,50 @@ def render_app_release_center(message="", building=False, detail=""):
     with db_connect() as connection:
         releases = app_release.list_releases(connection)
     release_rows = ""
-    for row in releases[:15]:
+    for row in releases:
+        release_id = int(row.get("id") or 0)
+        active_badge = (
+            '<span class="badge text-bg-success">Active</span>'
+            if row.get("active")
+            else '<span class="text-secondary">—</span>'
+        )
+        created = format_optional_timestamp(row.get("created_at"), "")
         release_rows += (
-            f"<tr><td>{escape(row.get('app_label') or '')}</td>"
+            f"<tr>"
+            f'<td><input class="form-check-input release-select" type="checkbox" name="releaseIds" '
+            f'value="{release_id}" form="bulk-delete-releases-form"></td>'
+            f"<td>{escape(row.get('app_label') or '')}</td>"
             f"<td><code>{escape(row.get('package_name') or '')}</code></td>"
             f"<td>{escape(str(row.get('version_name') or ''))}</td>"
             f"<td>{escape(str(row.get('version_code') or ''))}</td>"
             f"<td><code>{escape(str(row.get('apk_filename') or ''))}</code></td>"
-            f"<td>{'yes' if row.get('active') else ''}</td></tr>"
+            f"<td>{active_badge}</td>"
+            f'<td class="small text-secondary">{escape(created)}</td>'
+            f'<td class="text-nowrap">'
+            f'<form method="post" action="/app-release-center/push-release" class="d-inline">'
+            f'<input type="hidden" name="releaseId" value="{release_id}">'
+            f'<button class="btn btn-sm btn-success" type="submit">Push</button></form> '
+            f'<form method="post" action="/app-release-center/delete-releases" class="d-inline" '
+            f'onsubmit="return confirm(\'Remove this release from catalog and delete its APK file if unused?\');">'
+            f'<input type="hidden" name="releaseIds" value="{release_id}">'
+            f'<button class="btn btn-sm btn-outline-danger" type="submit">Remove</button></form>'
+            f"</td></tr>"
         )
     if not release_rows:
-        release_rows = '<tr><td colspan="6" class="text-secondary">No releases yet. Use one-click deploy below.</td></tr>'
+        release_rows = (
+            '<tr><td colspan="9" class="text-secondary">No releases yet. Use one-click deploy below.</td></tr>'
+        )
+    release_catalog_script = (
+        "<script>"
+        "(function(){"
+        "var selectAll=document.getElementById('select-all-releases');"
+        "if(!selectAll)return;"
+        "selectAll.addEventListener('change',function(){"
+        "document.querySelectorAll('.release-select').forEach(function(cb){cb.checked=selectAll.checked;});"
+        "});"
+        "})();"
+        "</script>"
+    )
     content = (
         f'{message_html}'
         '<section class="admin-card p-4 mb-4 border border-success">'
@@ -5308,13 +5611,27 @@ def render_app_release_center(message="", building=False, detail=""):
         '<button class="btn btn-outline-success" type="submit">Push last registered release only</button>'
         "</form></section>"
         '<section class="admin-card p-4">'
-        "<h2 class=\"h5\">Orphen APK Installer (install once per phone)</h2>"
-        "<p class=\"text-secondary\">Download <code>/apk/oui.apk</code> (installer) and install on each phone. "
+        "<h2 class=\"h5\">Release catalog (all versions)</h2>"
+        "<p class=\"text-secondary mb-3\">Push any listed build to enrolled devices, or remove old entries. "
+        "Removing deletes the database row and the APK file on disk when no other release uses the same filename.</p>"
+        '<form id="bulk-delete-releases-form" method="post" action="/app-release-center/delete-releases" '
+        'class="d-flex flex-wrap gap-2 align-items-center mb-3" '
+        'onsubmit="return confirm(\'Delete all selected releases and their APK files (when unused)?\');">'
+        '<button class="btn btn-outline-danger" type="submit">Delete selected</button>'
+        '<span class="text-secondary small">Use row checkboxes or Select all</span>'
+        "</form>"
+        '<div class="table-responsive">'
+        '<table class="table table-sm align-middle"><thead><tr>'
+        '<th><input class="form-check-input" type="checkbox" id="select-all-releases" title="Select all"></th>'
+        "<th>App</th><th>Package</th><th>Version</th><th>Code</th><th>APK file</th><th>Active</th><th>Created</th><th>Actions</th>"
+        "</tr></thead>"
+        f"<tbody>{release_rows}</tbody></table></div>"
+        "<h3 class=\"h6 mt-4\">Orphen APK Installer (install once per phone)</h3>"
+        "<p class=\"text-secondary mb-0\">Download <code>/apk/oui.apk</code> (installer) and install on each phone. "
         "It polls the server catalog, installs newer APKs, then <strong>deletes</strong> the downloaded file. "
         f"Catalog: <code>http://{escape(server.get('host'))}:{escape(server.get('port'))}/api/update-manager/catalog</code></p>"
-        "<p class=\"text-secondary\">After a one-click server build, installer APK is rebuilt automatically when possible.</p>"
-        '<table class="table table-sm"><thead><tr><th>App</th><th>Package</th><th>Version</th><th>Code</th><th>APK file</th><th>Active</th></tr></thead>'
-        f"<tbody>{release_rows}</tbody></table>"
+        "<p class=\"text-secondary small mt-2 mb-0\">After a one-click server build, installer APK is rebuilt automatically when possible.</p>"
+        f"{release_catalog_script}"
         "</section>"
     )
     return render_admin_page(
@@ -5323,35 +5640,6 @@ def render_app_release_center(message="", building=False, detail=""):
         content,
         active_path="/app-release-center",
         fluid=True,
-    )
-
-
-def render_wifi_profile_config(config, message=""):
-    message_html = f'<div class="alert alert-info">{escape(message)}</div>' if message else ""
-    password_placeholder = "Leave blank to keep existing password" if config.get("password") else "Wi-Fi password"
-    wpa_selected = "selected" if config.get("security", "WPA") == "WPA" else ""
-    open_selected = "selected" if config.get("security") == "OPEN" else ""
-    ssid = escape(config.get("ssid"))
-    content = (
-        f'<section class="admin-card p-4">{message_html}'
-        '<form method="post" action="/wifi-profile-config">'
-        '<label class="form-label fw-bold" for="ssid">SSID</label>'
-        f'<input class="form-control mb-3" id="ssid" name="ssid" value="{ssid}" placeholder="Office-LAN">'
-        '<label class="form-label fw-bold" for="password">Password</label>'
-        f'<input class="form-control mb-3" id="password" name="password" type="password" placeholder="{password_placeholder}">'
-        '<label class="form-label fw-bold" for="security">Security</label>'
-        f'<select class="form-select mb-3" id="security" name="security">'
-        f'<option value="WPA" {wpa_selected}>WPA/WPA2</option>'
-        f'<option value="OPEN" {open_selected}>Open network</option></select>'
-        '<button class="btn btn-primary" type="submit">Save Wi-Fi Profile</button>'
-        "</form></section>"
-    )
-    return render_admin_page(
-        "Office Wi-Fi Profile",
-        "Default SSID/password pushed with the Push Wi-Fi Profile remote command.",
-        content,
-        active_path="/wifi-profile-config",
-        fluid=False,
     )
 
 
@@ -7758,6 +8046,8 @@ def render_device_security_page(device, requests, message=""):
 
 DEVICE_MENU_ITEMS = (
     ("detail", "Details & Remote Commands", "/devices/detail"),
+    ("geofence", "Geofence", "/devices/geofence"),
+    ("wifi", "Wi-Fi Profile", "/devices/wifi-profile"),
     ("location", "Live Location Map", "/devices/location"),
     ("call_log", "Call Log History", "/devices/call-log"),
     ("sms", "SMS History", "/devices/sms-history"),
