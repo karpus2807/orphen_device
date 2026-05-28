@@ -278,8 +278,6 @@ public final class BackendClient {
             if (!isRemoteHostUsable(host)) {
                 throw new Exception("Remote host must be a reachable LAN IP or hostname");
             }
-        } else if (!isValidPort(port)) {
-            throw new Exception("Port must be a number between 1 and 65535");
         }
 
         if (!isValidPort(port)) {
@@ -357,13 +355,13 @@ public final class BackendClient {
         if (stream == null) {
             return "";
         }
-        BufferedReader reader = new BufferedReader(new InputStreamReader(stream, "UTF-8"));
         StringBuilder response = new StringBuilder();
-        String line;
-        while ((line = reader.readLine()) != null) {
-            response.append(line);
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, "UTF-8"))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                response.append(line);
+            }
         }
-        reader.close();
         return response.toString();
     }
 
@@ -384,6 +382,9 @@ public final class BackendClient {
     }
 
     public static String extractJsonValue(String json, String key) {
+        if (json == null || key == null || key.length() == 0) {
+            return "";
+        }
         String marker = "\"" + key + "\":";
         int keyIndex = json.indexOf(marker);
         if (keyIndex < 0) {
