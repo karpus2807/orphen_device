@@ -382,7 +382,7 @@ public final class BackendClient {
     }
 
     public static String extractJsonValue(String json, String key) {
-        if (json == null || key == null || key.length() == 0) {
+        if (json == null || key == null || key.isEmpty()) {
             return "";
         }
         String marker = "\"" + key + "\":";
