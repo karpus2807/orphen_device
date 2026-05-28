@@ -1,9 +1,13 @@
+"""Device provisioning service helpers extracted from server.py."""
+
+
 def build_devices_provision_payload(
     device_id,
     consume_pending_device_token,
     redeliver_sealed_device_token,
     get_device_by_id,
 ):
+    """Build payload/status tuple for GET /devices/provision responses."""
     if not device_id:
         return {"error": "deviceId_required"}, 400
     pending_token = consume_pending_device_token(device_id)

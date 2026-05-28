@@ -36,9 +36,8 @@ public final class BackendClient {
         return prefs(context).getString("deviceToken", "").trim().length() > 0;
     }
 
-    public static boolean saveDeviceToken(Context context, String token) {
+    public static void saveDeviceToken(Context context, String token) {
         prefs(context).edit().putString("deviceToken", token.trim()).apply();
-        return true;
     }
 
     public static void clearDeviceToken(Context context) {
