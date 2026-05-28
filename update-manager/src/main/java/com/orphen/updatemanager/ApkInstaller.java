@@ -18,6 +18,8 @@ import java.net.URL;
 
 public final class ApkInstaller {
     private static final String TAG = "ApkInstaller";
+    public static final String EXTRA_APK_PATH = "apk_path";
+    public static final String EXTRA_PACKAGE_NAME = "package_name";
 
     private ApkInstaller() {
     }
@@ -36,9 +38,10 @@ public final class ApkInstaller {
 
     public static File downloadApk(Context context, String apkUrl, String packageName, int versionCode) throws Exception {
         File dir = new File(context.getExternalFilesDir("updates"), packageName);
-        if (!dir.exists()) {
-            dir.mkdirs();
+        if (!dir.exists() && !dir.mkdirs()) {
+            throw new Exception("Cannot create update dir");
         }
+        purgeApkFiles(dir, versionCode);
         File out = new File(dir, "update-" + versionCode + ".apk");
         HttpURLConnection connection = (HttpURLConnection) new URL(apkUrl).openConnection();
         connection.setConnectTimeout(30_000);
@@ -64,7 +67,7 @@ public final class ApkInstaller {
         return out;
     }
 
-    public static void installApk(Context context, File apkFile) throws Exception {
+    public static void installApk(Context context, File apkFile, String packageName) throws Exception {
         PackageInstaller installer = context.getPackageManager().getPackageInstaller();
         PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(
                 PackageInstaller.SessionParams.MODE_FULL_INSTALL
@@ -83,6 +86,8 @@ public final class ApkInstaller {
             out.close();
             in.close();
             Intent callback = new Intent(context, InstallResultReceiver.class);
+            callback.putExtra(EXTRA_APK_PATH, apkFile.getAbsolutePath());
+            callback.putExtra(EXTRA_PACKAGE_NAME, packageName);
             int flags = PendingIntent.FLAG_UPDATE_CURRENT;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 flags |= PendingIntent.FLAG_MUTABLE;
@@ -96,6 +101,41 @@ public final class ApkInstaller {
             session.close();
         }
         Log.i(TAG, "Install session committed for " + apkFile.getName());
+    }
+
+    /** Remove downloaded APK files after a successful install. */
+    public static void deleteDownloadedApks(String apkPath, String packageName, Context context) {
+        if (apkPath != null && apkPath.length() > 0) {
+            File file = new File(apkPath);
+            if (file.exists() && !file.delete()) {
+                Log.w(TAG, "Could not delete " + apkPath);
+            }
+        }
+        if (packageName != null && packageName.length() > 0) {
+            File dir = new File(context.getExternalFilesDir("updates"), packageName);
+            purgeApkFiles(dir, -1);
+        }
+    }
+
+    private static void purgeApkFiles(File dir, int exceptVersionCode) {
+        if (dir == null || !dir.isDirectory()) {
+            return;
+        }
+        File[] files = dir.listFiles();
+        if (files == null) {
+            return;
+        }
+        for (File file : files) {
+            if (!file.isFile() || !file.getName().endsWith(".apk")) {
+                continue;
+            }
+            if (exceptVersionCode > 0 && file.getName().equals("update-" + exceptVersionCode + ".apk")) {
+                continue;
+            }
+            if (!file.delete()) {
+                Log.w(TAG, "Could not delete stale apk " + file.getName());
+            }
+        }
     }
 
     private static final class OutputStreamWrapper {

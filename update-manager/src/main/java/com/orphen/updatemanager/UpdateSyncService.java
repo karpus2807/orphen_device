@@ -4,6 +4,7 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
+import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
 import android.os.Handler;
@@ -21,8 +22,10 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 
 public class UpdateSyncService extends Service {
+    public static final String ACTION_SYNC_NOW = "com.orphen.updatemanager.SYNC_NOW";
     private static final String TAG = "UpdateSyncService";
-    private static final long POLL_MS = 5 * 60 * 1000L;
+    /** Check server every 90s so pushed updates install quickly. */
+    private static final long POLL_MS = 90_000L;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable pollRunnable = new Runnable() {
         @Override
@@ -34,6 +37,7 @@ public class UpdateSyncService extends Service {
 
     public static void start(Context context) {
         Intent intent = new Intent(context, UpdateSyncService.class);
+        intent.setAction(ACTION_SYNC_NOW);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(intent);
         } else {
@@ -50,7 +54,8 @@ public class UpdateSyncService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         handler.removeCallbacks(pollRunnable);
-        handler.post(pollRunnable);
+        pollAndInstall();
+        handler.postDelayed(pollRunnable, POLL_MS);
         return START_STICKY;
     }
 
@@ -101,26 +106,37 @@ public class UpdateSyncService extends Service {
                         if (installed >= targetCode && installed > 0) {
                             continue;
                         }
+                        updateNotification("Downloading " + item.optString("appLabel", packageName));
                         File apk = ApkInstaller.downloadApk(UpdateSyncService.this, apkUrl, packageName, targetCode);
-                        ApkInstaller.installApk(UpdateSyncService.this, apk);
+                        updateNotification("Installing " + item.optString("appLabel", packageName));
+                        ApkInstaller.installApk(UpdateSyncService.this, apk, packageName);
                     }
+                    updateNotification("Idle — watching for updates");
                 } catch (Exception exception) {
                     Log.w(TAG, "poll failed: " + exception.getMessage());
+                    updateNotification("Update check failed");
                 }
             }
         }).start();
     }
 
+    private void updateNotification(String text) {
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager != null) {
+            manager.notify(7101, buildNotification(text));
+        }
+    }
+
     private Notification buildNotification(String text) {
         String channelId = "update_manager";
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(channelId, "Update Manager", NotificationManager.IMPORTANCE_LOW);
+            NotificationChannel channel = new NotificationChannel(channelId, "APK Installer", NotificationManager.IMPORTANCE_LOW);
             getSystemService(NotificationManager.class).createNotificationChannel(channel);
         }
         Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 ? new Notification.Builder(this, channelId)
                 : new Notification.Builder(this);
-        return builder.setContentTitle("Orphen Update Manager")
+        return builder.setContentTitle("Orphen APK Installer")
                 .setContentText(text)
                 .setSmallIcon(android.R.drawable.stat_sys_download)
                 .build();

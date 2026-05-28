@@ -8,15 +8,21 @@ import android.util.Log;
 import android.widget.Toast;
 
 public class InstallResultReceiver extends BroadcastReceiver {
+    private static final String TAG = "InstallResult";
+
     @Override
     public void onReceive(Context context, Intent intent) {
         if (intent == null) {
             return;
         }
+        String apkPath = intent.getStringExtra(ApkInstaller.EXTRA_APK_PATH);
+        String packageName = intent.getStringExtra(ApkInstaller.EXTRA_PACKAGE_NAME);
         int status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE);
         String message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
         if (status == PackageInstaller.STATUS_SUCCESS) {
-            Toast.makeText(context, "Update installed", Toast.LENGTH_LONG).show();
+            ApkInstaller.deleteDownloadedApks(apkPath, packageName, context);
+            Toast.makeText(context, "Update installed. Downloaded APK removed.", Toast.LENGTH_LONG).show();
+            UpdateSyncService.start(context);
             return;
         }
         if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
@@ -27,7 +33,7 @@ public class InstallResultReceiver extends BroadcastReceiver {
             }
             return;
         }
-        Log.w("InstallResult", "failed: " + message);
+        Log.w(TAG, "failed: " + message);
         Toast.makeText(context, "Install failed: " + message, Toast.LENGTH_LONG).show();
     }
 }

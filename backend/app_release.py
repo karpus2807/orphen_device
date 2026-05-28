@@ -16,6 +16,8 @@ APK_DIR = ROOT / "apk"
 BUILD_DIR = ROOT / "build"
 VERSION_FILE = ROOT / "app" / "version.properties"
 BUILD_SCRIPT = ROOT / "scripts" / "build-apk.sh"
+UPDATE_MANAGER_BUILD_SCRIPT = ROOT / "scripts" / "build-update-manager-apk.sh"
+UPDATE_MANAGER_APK = "orphen-update-manager.apk"
 BUILD_LOG = ROOT / "backend" / "data" / "build.log"
 DATABASE_FILE = ROOT / "backend" / "data" / "device_safety.db"
 BUILD_LOCK = threading.Lock()
@@ -262,6 +264,8 @@ def _run_build_thread(
             BUILD_STATE["message"] = f"Build failed (exit {result.returncode}). See build log below."
             return
 
+        _build_update_manager_apk(env)
+
         BUILD_STATE["phase"] = "publishing"
         BUILD_STATE["message"] = "Publishing APK..."
         apk_filename = publish_built_apk(version_name, version_code)
@@ -280,6 +284,7 @@ def _run_build_thread(
                     release_notes,
                     apk_filename,
                 )
+                _register_update_manager_release(connection)
                 connection.commit()
 
         server = read_server_config_from_db()
