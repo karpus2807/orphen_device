@@ -11,6 +11,7 @@ WorkingDirectory=__APP_DIR__
 Environment=PYTHONUNBUFFERED=1
 Environment=DEVICE_SAFETY_BIND_HOST=0.0.0.0
 Environment=DEVICE_SAFETY_PORT=__DEVICE_SAFETY_PORT__
+EnvironmentFile=-__APP_DIR__/deploy/server.env
 ExecStart=/usr/bin/python3 __APP_DIR__/backend/server.py
 Restart=always
 RestartSec=5

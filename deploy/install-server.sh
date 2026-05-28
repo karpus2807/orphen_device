@@ -27,7 +27,7 @@ else
   sudo -u "${DEPLOY_USER}" git reset --hard "origin/${GIT_BRANCH}"
 fi
 
-mkdir -p "${APP_DIR}/backend/data" "${APP_DIR}/apk"
+mkdir -p "${APP_DIR}/backend/data" "${APP_DIR}/apk" "${APP_DIR}/build"
 chown -R "${DEPLOY_USER}:${DEPLOY_USER}" "${APP_DIR}"
 
 install_unit() {

@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import sqlite3
 import subprocess
 import threading
 import time
@@ -15,8 +17,16 @@ BUILD_DIR = ROOT / "build"
 VERSION_FILE = ROOT / "app" / "version.properties"
 BUILD_SCRIPT = ROOT / "scripts" / "build-apk.sh"
 BUILD_LOG = ROOT / "backend" / "data" / "build.log"
+DATABASE_FILE = ROOT / "backend" / "data" / "device_safety.db"
 BUILD_LOCK = threading.Lock()
-BUILD_STATE = {"running": False, "last_ok": False, "message": "", "finished_at": 0}
+BUILD_STATE = {
+    "running": False,
+    "last_ok": False,
+    "message": "",
+    "finished_at": 0,
+    "phase": "idle",
+    "pushed_count": 0,
+}
 
 
 def ensure_app_releases_table(connection):
@@ -71,6 +81,7 @@ def read_version_properties():
 
 
 def write_version_properties(version_code, version_name):
+    VERSION_FILE.parent.mkdir(parents=True, exist_ok=True)
     VERSION_FILE.write_text(
         f"# Bumped from App Release Center\n"
         f"versionCode={version_code}\n"
@@ -79,32 +90,164 @@ def write_version_properties(version_code, version_name):
     )
 
 
+def bump_version():
+    """Return next (version_code, version_name) from current properties."""
+    props = read_version_properties()
+    code = int(props.get("versionCode", "1") or "1")
+    name = str(props.get("versionName", "1.0.0") or "1.0.0")
+    new_code = code + 1
+    parts = name.split(".")
+    if len(parts) >= 3 and parts[-1].isdigit():
+        parts[-1] = str(int(parts[-1]) + 1)
+        new_name = ".".join(parts)
+    elif len(parts) == 2 and parts[-1].isdigit():
+        parts[-1] = str(int(parts[-1]) + 1)
+        new_name = ".".join(parts)
+    else:
+        new_name = f"{name}.{new_code}"
+    return str(new_code), new_name
+
+
+def apk_filename_for_version(version_name, version_code):
+    safe = re.sub(r"[^\w.\-]+", "_", str(version_name).strip()) or "release"
+    return f"device-safety-manager-{safe}-{version_code}.apk"
+
+
+def resolve_android_sdk_env(env):
+    """Fill ANDROID_BUILD_TOOLS / ANDROID_PLATFORM from ANDROID_SDK_ROOT or common paths."""
+    env = dict(env)
+    candidates = [
+        env.get("ANDROID_SDK_ROOT", "").strip(),
+        "/opt/android-sdk",
+        os.path.expanduser("~/Android/Sdk"),
+    ]
+    sdk_root = ""
+    for path in candidates:
+        if path and Path(path).is_dir():
+            sdk_root = path
+            break
+    if not sdk_root:
+        return env, "Android SDK not found. Run: sudo bash scripts/install-android-sdk-server.sh"
+    env["ANDROID_SDK_ROOT"] = sdk_root
+    bt_dir = Path(sdk_root) / "build-tools"
+    if bt_dir.is_dir():
+        versions = sorted((p.name for p in bt_dir.iterdir() if p.is_dir()), reverse=True)
+        for ver in versions:
+            aapt2 = bt_dir / ver / "aapt2"
+            if aapt2.is_file():
+                env["ANDROID_BUILD_TOOLS"] = str(bt_dir / ver)
+                break
+    platform = Path(sdk_root) / "platforms" / "android-36" / "android.jar"
+    if platform.is_file():
+        env["ANDROID_PLATFORM"] = str(platform)
+    if not env.get("ANDROID_BUILD_TOOLS") or not env.get("ANDROID_PLATFORM"):
+        return env, f"SDK incomplete under {sdk_root}. Install build-tools;36 and platforms;android-36."
+    return env, ""
+
+
+def publish_built_apk(version_name, version_code):
+    """Copy build output to versioned APK name + canonical debug name for /apk/ URL."""
+    APK_DIR.mkdir(parents=True, exist_ok=True)
+    built = BUILD_DIR / "device-safety-manager-debug.apk"
+    canonical = APK_DIR / "device-safety-manager-debug.apk"
+    if not built.is_file():
+        built = APK_DIR / "device-safety-manager-debug.apk"
+    if not built.is_file() or built.stat().st_size < 100_000:
+        raise FileNotFoundError("APK missing after build")
+    versioned_name = apk_filename_for_version(version_name, version_code)
+    versioned_path = APK_DIR / versioned_name
+    shutil.copy2(built, versioned_path)
+    shutil.copy2(built, canonical)
+    return versioned_name
+
+
+def db_connect():
+    DATABASE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(DATABASE_FILE)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def read_server_config_from_db():
+    defaults = {"host": "127.0.0.1", "port": "9030"}
+    with db_connect() as connection:
+        rows = connection.execute("SELECT key, value FROM server_config").fetchall()
+    for row in rows:
+        key = row["key"] if isinstance(row, sqlite3.Row) else row[0]
+        value = row["value"] if isinstance(row, sqlite3.Row) else row[1]
+        if key in defaults:
+            defaults[key] = value
+    return defaults
+
+
+def write_ota_config_db(version_name, apk_url, release_notes):
+    with db_connect() as connection:
+        for key, value in (
+            ("version", version_name),
+            ("apkUrl", apk_url),
+            ("releaseNotes", release_notes or ""),
+        ):
+            connection.execute(
+                "INSERT INTO ota_settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+        connection.commit()
+
+
 def get_build_status():
     log_tail = ""
     if BUILD_LOG.exists():
         lines = BUILD_LOG.read_text(encoding="utf-8", errors="replace").splitlines()
         log_tail = "\n".join(lines[-40:])
+    next_code, next_name = bump_version()
+    env, sdk_err = resolve_android_sdk_env(os.environ.copy())
     return {
         "running": BUILD_STATE["running"],
         "lastOk": BUILD_STATE["last_ok"],
         "message": BUILD_STATE["message"],
         "finishedAt": BUILD_STATE["finished_at"],
+        "phase": BUILD_STATE.get("phase", "idle"),
+        "pushedCount": BUILD_STATE.get("pushed_count", 0),
         "logTail": log_tail,
         "version": read_version_properties(),
+        "nextVersionCode": next_code,
+        "nextVersionName": next_name,
+        "sdkReady": not bool(sdk_err),
+        "sdkError": sdk_err,
+        "androidSdkRoot": env.get("ANDROID_SDK_ROOT", ""),
     }
 
 
-def _run_build_thread(version_code, version_name):
+def _run_build_thread(
+    version_code,
+    version_name,
+    *,
+    auto_register=True,
+    auto_push=True,
+    release_notes="",
+    package_name="com.example.devicesafety",
+    app_label="Device Safety Manager",
+    create_command_fn=None,
+    read_devices_fn=None,
+):
     global BUILD_STATE
-    BUILD_STATE = {"running": True, "last_ok": False, "message": "Building...", "finished_at": 0}
+    BUILD_STATE = {
+        "running": True,
+        "last_ok": False,
+        "message": "Building APK...",
+        "finished_at": 0,
+        "phase": "building",
+        "pushed_count": 0,
+    }
     BUILD_LOG.parent.mkdir(parents=True, exist_ok=True)
+    APK_DIR.mkdir(parents=True, exist_ok=True)
     try:
         write_version_properties(version_code, version_name)
-        env = os.environ.copy()
-        sdk = env.get("ANDROID_SDK_ROOT", "").strip()
-        if sdk:
-            env["ANDROID_BUILD_TOOLS"] = f"{sdk}/build-tools/36.0.0"
-            env["ANDROID_PLATFORM"] = f"{sdk}/platforms/android-36/android.jar"
+        env, sdk_err = resolve_android_sdk_env(os.environ.copy())
+        if sdk_err:
+            BUILD_STATE["message"] = sdk_err
+            return
         with open(BUILD_LOG, "w", encoding="utf-8") as log_file:
             result = subprocess.run(
                 ["bash", str(BUILD_SCRIPT)],
@@ -112,38 +255,114 @@ def _run_build_thread(version_code, version_name):
                 env=env,
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
-                timeout=600,
+                timeout=900,
                 check=False,
             )
         if result.returncode != 0:
-            BUILD_STATE["message"] = f"Build failed (exit {result.returncode}). See build log."
+            BUILD_STATE["message"] = f"Build failed (exit {result.returncode}). See build log below."
             return
-        apk = APK_DIR / "device-safety-manager-debug.apk"
-        if not apk.is_file() or apk.stat().st_size < 100_000:
-            BUILD_STATE["message"] = "Build finished but APK missing in apk/"
-            return
+
+        BUILD_STATE["phase"] = "publishing"
+        BUILD_STATE["message"] = "Publishing APK..."
+        apk_filename = publish_built_apk(version_name, version_code)
+
+        if auto_register:
+            BUILD_STATE["phase"] = "registering"
+            BUILD_STATE["message"] = f"Registered {apk_filename}..."
+            with db_connect() as connection:
+                ensure_app_releases_table(connection)
+                register_release(
+                    connection,
+                    package_name,
+                    app_label,
+                    version_name,
+                    version_code,
+                    release_notes,
+                    apk_filename,
+                )
+                connection.commit()
+
+        server = read_server_config_from_db()
+        payload = build_ota_payload_for_release(
+            server["host"],
+            server["port"],
+            version_name,
+            version_code,
+            release_notes,
+            apk_filename,
+        )
+        write_ota_config_db(version_name, payload["apkUrl"], release_notes)
+
+        pushed = 0
+        if auto_push and create_command_fn and read_devices_fn:
+            BUILD_STATE["phase"] = "pushing"
+            BUILD_STATE["message"] = "Pushing update to all devices..."
+            queued = queue_push_to_devices(
+                create_command_fn,
+                read_devices_fn,
+                package_name,
+                payload,
+            )
+            pushed = len(queued)
+            BUILD_STATE["pushed_count"] = pushed
+
         BUILD_STATE["last_ok"] = True
-        BUILD_STATE["message"] = f"Built {version_name} ({version_code}) — {apk.stat().st_size} bytes"
+        BUILD_STATE["message"] = (
+            f"Done: v{version_name} ({version_code}) → {apk_filename}. "
+            f"Pushed to {pushed} device(s)."
+        )
     except subprocess.TimeoutExpired:
-        BUILD_STATE["message"] = "Build timed out after 10 minutes"
+        BUILD_STATE["message"] = "Build timed out after 15 minutes"
     except Exception as exc:
         BUILD_STATE["message"] = str(exc)
     finally:
         BUILD_STATE["running"] = False
         BUILD_STATE["finished_at"] = int(time.time())
+        BUILD_STATE["phase"] = "idle" if BUILD_STATE["last_ok"] else "failed"
 
 
-def start_build(version_code, version_name):
+def start_build(version_code, version_name, **kwargs):
     with BUILD_LOCK:
         if BUILD_STATE["running"]:
             return False, "A build is already running"
         thread = threading.Thread(
             target=_run_build_thread,
             args=(str(version_code), str(version_name)),
+            kwargs=kwargs,
             daemon=True,
         )
         thread.start()
         return True, "Build started"
+
+
+def start_build_and_push(
+    create_command_fn,
+    read_devices_fn,
+    *,
+    auto_bump=True,
+    version_code="",
+    version_name="",
+    release_notes="",
+    package_name="com.example.devicesafety",
+    app_label="Device Safety Manager",
+):
+    if auto_bump or not version_code or not version_name:
+        version_code, version_name = bump_version()
+    with BUILD_LOCK:
+        if BUILD_STATE["running"]:
+            return False, "A build is already running", version_code, version_name
+    ok, msg = start_build(
+        version_code,
+        version_name,
+        auto_register=True,
+        auto_push=True,
+        release_notes=release_notes,
+        package_name=package_name,
+        app_label=app_label,
+        create_command_fn=create_command_fn,
+        read_devices_fn=read_devices_fn,
+    )
+    return ok, msg, version_code, version_name
 
 
 def register_release(connection, package_name, app_label, version_name, version_code, release_notes, apk_filename):

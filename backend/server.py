@@ -3207,6 +3207,9 @@ class ApiHandler(BaseHTTPRequestHandler):
         if path == "/app-release-center/build":
             self.app_release_build()
             return
+        if path == "/app-release-center/build-push":
+            self.app_release_build_push()
+            return
         if path == "/app-release-center/push":
             self.app_release_push()
             return
@@ -3267,6 +3270,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             "/ota-config",
             "/app-release-center",
             "/app-release-center/build",
+            "/app-release-center/build-push",
             "/app-release-center/push",
             "/app-release-center/register",
             "/wifi-profile-config",
@@ -3946,8 +3950,34 @@ class ApiHandler(BaseHTTPRequestHandler):
         if not version_name or not version_code.isdigit():
             self.send_html(render_app_release_center("Version name and numeric version code are required."))
             return
-        ok, message = app_release.start_build(version_code, version_name)
+        ok, message = app_release.start_build(
+            version_code,
+            version_name,
+            auto_register=False,
+            auto_push=False,
+        )
         self.send_html(render_app_release_center(message))
+
+    def app_release_build_push(self):
+        body = self.read_form_body()
+        release_notes = str(body.get("releaseNotes", [""])[0]).strip()
+        package_name = str(body.get("packageName", ["com.example.devicesafety"])[0]).strip()
+        app_label = str(body.get("appLabel", ["Device Safety Manager"])[0]).strip()
+        auto_bump = str(body.get("autoBump", ["on"])[0]).strip().lower() in ("on", "1", "true", "yes")
+        version_name = str(body.get("versionName", [""])[0]).strip()
+        version_code = str(body.get("versionCode", [""])[0]).strip()
+        ok, message, vc, vn = app_release.start_build_and_push(
+            create_device_command,
+            read_devices,
+            auto_bump=auto_bump,
+            version_code=version_code,
+            version_name=version_name,
+            release_notes=release_notes,
+            package_name=package_name,
+            app_label=app_label,
+        )
+        detail = f"Building v{vn} ({vc}). Refresh this page — status updates automatically."
+        self.send_html(render_app_release_center(message if ok else message, building=ok, detail=detail))
 
     def app_release_register(self):
         body = self.read_form_body()
@@ -3958,6 +3988,8 @@ class ApiHandler(BaseHTTPRequestHandler):
         release_notes = str(body.get("releaseNotes", [""])[0]).strip()
         apk_filename = "device-safety-manager-debug.apk"
         apk_path = ROOT.parent / "apk" / apk_filename
+        if not apk_path.is_file():
+            apk_path = ROOT.parent / "apk" / "device-safety-manager-debug.apk"
         if not version_name or not version_code.isdigit():
             self.send_html(render_app_release_center("Version name and version code required."))
             return
@@ -5166,13 +5198,42 @@ def render_ota_config(config, server_config, message=""):
     )
 
 
-def render_app_release_center(message=""):
+def render_app_release_center(message="", building=False, detail=""):
     message_html = f'<div class="alert alert-info">{escape(message)}</div>' if message else ""
+    if detail:
+        message_html += f'<div class="alert alert-secondary">{escape(detail)}</div>'
     version = app_release.read_version_properties()
     server = read_server_config()
     build_status = app_release.get_build_status()
     status_line = escape(build_status.get("message") or "Ready")
     log_tail = escape(build_status.get("logTail") or "")
+    next_code = escape(str(build_status.get("nextVersionCode") or ""))
+    next_name = escape(str(build_status.get("nextVersionName") or ""))
+    sdk_ready = build_status.get("sdkReady")
+    sdk_err = escape(str(build_status.get("sdkError") or ""))
+    sdk_root = escape(str(build_status.get("androidSdkRoot") or ""))
+    sdk_alert = (
+        '<div class="alert alert-warning">'
+        "<strong>Android SDK required on server</strong> for one-click build. "
+        "SSH: <code>sudo bash scripts/install-android-sdk-server.sh /opt/android-sdk "
+        f"/opt/device-safety-manager/deploy/server.env</code> then "
+        "<code>systemctl restart device-safety-backend</code>. "
+        f"{sdk_err}</div>"
+        if not sdk_ready
+        else f'<p class="text-secondary small mb-0">SDK: <code>{sdk_root or "detected"}</code></p>'
+    )
+    poll_script = ""
+    if building or build_status.get("running"):
+        poll_script = (
+            "<script>"
+            "(function poll(){fetch('/app-release-center/status.json',{credentials:'same-origin'})"
+            ".then(r=>r.json()).then(s=>{"
+            "var el=document.getElementById('build-status-line');"
+            "if(el)el.textContent=s.message||'Working...';"
+            "if(s.running)setTimeout(poll,2500);else if(s.running===false)location.reload();"
+            "}).catch(()=>setTimeout(poll,4000));})();"
+            "</script>"
+        )
     with db_connect() as connection:
         releases = app_release.list_releases(connection)
     release_rows = ""
@@ -5182,29 +5243,51 @@ def render_app_release_center(message=""):
             f"<td><code>{escape(row.get('package_name') or '')}</code></td>"
             f"<td>{escape(str(row.get('version_name') or ''))}</td>"
             f"<td>{escape(str(row.get('version_code') or ''))}</td>"
+            f"<td><code>{escape(str(row.get('apk_filename') or ''))}</code></td>"
             f"<td>{'yes' if row.get('active') else ''}</td></tr>"
         )
     if not release_rows:
-        release_rows = '<tr><td colspan="5" class="text-secondary">No releases registered yet.</td></tr>'
+        release_rows = '<tr><td colspan="6" class="text-secondary">No releases yet. Use one-click deploy below.</td></tr>'
     content = (
         f'{message_html}'
+        '<section class="admin-card p-4 mb-4 border border-success">'
+        "<h2 class=\"h5\">One-click: Build + version bump + push to all phones</h2>"
+        "<p class=\"text-secondary\">After <code>git push</code> updates server code, open this page and press the button. "
+        "Version code/name auto-increment, APK is renamed under <code>apk/</code>, OTA is registered, and "
+        "<code>push_app_update</code> is queued for every enrolled device.</p>"
+        f"{sdk_alert}"
+        f'<p class="mb-2"><strong>Status:</strong> <span id="build-status-line">{status_line}</span></p>'
+        '<form method="post" action="/app-release-center/build-push">'
+        '<input type="hidden" name="autoBump" value="on">'
+        '<input type="hidden" name="packageName" value="com.example.devicesafety">'
+        '<input type="hidden" name="appLabel" value="Device Safety Manager">'
+        '<div class="row g-2 mb-2">'
+        '<div class="col-md-3"><label class="form-label">Next version name</label>'
+        f'<input class="form-control" name="versionName" value="{next_name}" readonly></div>'
+        '<div class="col-md-3"><label class="form-label">Next version code</label>'
+        f'<input class="form-control" name="versionCode" value="{next_code}" readonly></div>'
+        '<div class="col-md-6"><label class="form-label">Release notes</label>'
+        '<input class="form-control" name="releaseNotes" placeholder="Optional changelog for devices"></div>'
+        "</div>"
+        '<button class="btn btn-success btn-lg" type="submit"'
+        + (" disabled" if not sdk_ready else "")
+        + ">Build APK, register &amp; push update</button>"
+        "</form>"
+        f'{poll_script}'
+        f'<pre class="small bg-dark text-light p-2 rounded mt-3" style="max-height:200px;overflow:auto">{log_tail}</pre>'
+        "</section>"
         '<section class="admin-card p-4 mb-4">'
-        "<h2 class=\"h5\">1. Build APK on server</h2>"
-        "<p class=\"text-secondary\">Requires Android SDK on server (<code>--with-android-sdk</code> in setup-all.sh) "
-        "or upload APK manually to <code>apk/device-safety-manager-debug.apk</code>.</p>"
-        f'<p class="mb-2"><strong>Status:</strong> {status_line}</p>'
+        "<h2 class=\"h5\">Advanced: build only (no push)</h2>"
         '<form method="post" action="/app-release-center/build" class="row g-2 mb-3">'
         '<div class="col-md-4"><label class="form-label">Version name</label>'
         f'<input class="form-control" name="versionName" value="{escape(version.get("versionName", "1.0.0"))}" required></div>'
         '<div class="col-md-4"><label class="form-label">Version code</label>'
         f'<input class="form-control" name="versionCode" value="{escape(version.get("versionCode", "1"))}" required></div>'
-        '<div class="col-md-4 d-flex align-items-end"><button class="btn btn-primary w-100" type="submit">Build APK</button></div>'
-        "</form>"
-        f'<pre class="small bg-dark text-light p-2 rounded" style="max-height:180px;overflow:auto">{log_tail}</pre>'
-        "</section>"
+        '<div class="col-md-4 d-flex align-items-end"><button class="btn btn-outline-primary w-100" type="submit">Build only</button></div>'
+        "</form></section>"
         '<section class="admin-card p-4 mb-4">'
-        "<h2 class=\"h5\">2. Register release</h2>"
-        '<form method="post" action="/app-release-center/register">'
+        "<h2 class=\"h5\">Advanced: register / push only</h2>"
+        '<form method="post" action="/app-release-center/register" class="mb-3">'
         '<div class="row g-2">'
         '<div class="col-md-3"><label class="form-label">Package</label>'
         '<input class="form-control" name="packageName" value="com.example.devicesafety"></div>'
@@ -5214,24 +5297,18 @@ def render_app_release_center(message=""):
         f'<input class="form-control" name="versionName" value="{escape(version.get("versionName", ""))}"></div>'
         '<div class="col-md-2"><label class="form-label">Version code</label>'
         f'<input class="form-control" name="versionCode" value="{escape(version.get("versionCode", ""))}"></div>'
-        '<div class="col-md-2 d-flex align-items-end"><button class="btn btn-outline-primary w-100" type="submit">Register</button></div>'
-        "</div>"
-        '<label class="form-label mt-2">Release notes</label>'
-        '<textarea class="form-control" name="releaseNotes" rows="2"></textarea>'
-        "</form></section>"
-        '<section class="admin-card p-4 mb-4">'
-        "<h2 class=\"h5\">3. Push OTA to all registered devices</h2>"
-        "<p class=\"text-secondary\">Queues <code>push_app_update</code> for each enrolled device (installed apps sync on next poll).</p>"
+        '<div class="col-md-2 d-flex align-items-end"><button class="btn btn-outline-secondary w-100" type="submit">Register</button></div>'
+        "</div></form>"
         '<form method="post" action="/app-release-center/push">'
         '<input type="hidden" name="packageName" value="com.example.devicesafety">'
-        '<button class="btn btn-success" type="submit">Push update to all devices</button>'
+        '<button class="btn btn-outline-success" type="submit">Push last registered release only</button>'
         "</form></section>"
         '<section class="admin-card p-4">'
         "<h2 class=\"h5\">Update Manager app</h2>"
         "<p class=\"text-secondary\">Install <code>update-manager</code> APK on devices once. It polls "
         f"<code>http://{escape(server.get('host'))}:{escape(server.get('port'))}/api/update-manager/catalog</code> "
         "and auto-installs listed packages.</p>"
-        '<table class="table table-sm"><thead><tr><th>App</th><th>Package</th><th>Version</th><th>Code</th><th>Active</th></tr></thead>'
+        '<table class="table table-sm"><thead><tr><th>App</th><th>Package</th><th>Version</th><th>Code</th><th>APK file</th><th>Active</th></tr></thead>'
         f"<tbody>{release_rows}</tbody></table>"
         "</section>"
     )

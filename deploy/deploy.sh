@@ -73,6 +73,7 @@ git clean -fd
 
 chmod +x deploy/*.sh deploy/webhook-server.py 2>/dev/null || true
 chmod +x scripts/*.sh 2>/dev/null || true
+mkdir -p apk build backend/data 2>/dev/null || true
 
 refresh_systemd_units || true
 
