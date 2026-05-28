@@ -33,6 +33,74 @@ BUILD_STATE = {
 }
 
 
+def _bump_name(base_name, fallback_code):
+    name = str(base_name or "").strip()
+    if not name:
+        return f"1.0.{int(fallback_code)}"
+    parts = name.split(".")
+    if len(parts) >= 3 and parts[-1].isdigit():
+        parts[-1] = str(int(parts[-1]) + 1)
+        return ".".join(parts)
+    if len(parts) == 2 and parts[-1].isdigit():
+        parts[-1] = str(int(parts[-1]) + 1)
+        return ".".join(parts)
+    if parts and parts[-1].isdigit():
+        parts[-1] = str(int(parts[-1]) + 1)
+        return ".".join(parts)
+    return f"{name}.{int(fallback_code)}"
+
+
+def _latest_release_row(connection, package_name):
+    row = connection.execute(
+        "SELECT version_name, version_code FROM app_releases "
+        "WHERE package_name = ? ORDER BY version_code DESC, created_at DESC LIMIT 1",
+        (package_name,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _latest_apk_version_code(package_name):
+    if not APK_DIR.is_dir():
+        return 0
+    if package_name == "com.orphen.devicesafety":
+        pattern = re.compile(r"^dsm-(\d+)\.apk$")
+        best = 0
+        for path in APK_DIR.glob("dsm-*.apk"):
+            match = pattern.match(path.name)
+            if not match:
+                continue
+            try:
+                code = int(match.group(1))
+            except (TypeError, ValueError):
+                continue
+            if code > best:
+                best = code
+        return best
+    return 0
+
+
+def _next_version_for_package(package_name, props):
+    props_code = int(props.get("versionCode", "1") or "1")
+    props_name = str(props.get("versionName", "1.0.0") or "1.0.0")
+    release_code = 0
+    release_name = ""
+    with db_connect() as connection:
+        ensure_app_releases_table(connection)
+        latest = _latest_release_row(connection, package_name)
+        if latest:
+            try:
+                release_code = int(latest.get("version_code") or 0)
+            except (TypeError, ValueError):
+                release_code = 0
+            release_name = str(latest.get("version_name") or "").strip()
+    apk_code = _latest_apk_version_code(package_name)
+    baseline_code = max(props_code, release_code, apk_code)
+    next_code = baseline_code + 1
+    base_name = release_name if release_code == baseline_code and release_name else props_name
+    next_name = _bump_name(base_name, next_code)
+    return str(next_code), next_name
+
+
 def ensure_app_releases_table(connection):
     connection.execute(
         "CREATE TABLE IF NOT EXISTS app_releases ("
@@ -122,38 +190,12 @@ def write_installer_version_properties(version_code, version_name):
 
 
 def bump_installer_version():
-    props = read_installer_version_properties()
-    code = int(props.get("versionCode", "7") or "7")
-    name = str(props.get("versionName", "1.1.2") or "1.1.2")
-    new_code = code + 1
-    parts = name.split(".")
-    if len(parts) >= 3 and parts[-1].isdigit():
-        parts[-1] = str(int(parts[-1]) + 1)
-        new_name = ".".join(parts)
-    elif len(parts) == 2 and parts[-1].isdigit():
-        parts[-1] = str(int(parts[-1]) + 1)
-        new_name = ".".join(parts)
-    else:
-        new_name = f"{name}.{new_code}"
-    return str(new_code), new_name
+    return _next_version_for_package("com.orphen.updatemanager", read_installer_version_properties())
 
 
 def bump_version():
     """Return next (version_code, version_name) from current properties."""
-    props = read_version_properties()
-    code = int(props.get("versionCode", "1") or "1")
-    name = str(props.get("versionName", "1.0.0") or "1.0.0")
-    new_code = code + 1
-    parts = name.split(".")
-    if len(parts) >= 3 and parts[-1].isdigit():
-        parts[-1] = str(int(parts[-1]) + 1)
-        new_name = ".".join(parts)
-    elif len(parts) == 2 and parts[-1].isdigit():
-        parts[-1] = str(int(parts[-1]) + 1)
-        new_name = ".".join(parts)
-    else:
-        new_name = f"{name}.{new_code}"
-    return str(new_code), new_name
+    return _next_version_for_package("com.orphen.devicesafety", read_version_properties())
 
 
 def apk_filename_for_version(version_name, version_code):
@@ -316,7 +358,7 @@ def _register_update_manager_release(connection, version_name="", version_code="
     return True
 
 
-def _run_installer_build_thread(*, auto_bump=True, release_notes=""):
+def _run_installer_build_thread(*, auto_bump=True, release_notes="", version_code="", version_name=""):
     global BUILD_STATE
     BUILD_STATE = {
         "running": True,
@@ -332,9 +374,11 @@ def _run_installer_build_thread(*, auto_bump=True, release_notes=""):
         if auto_bump:
             version_code, version_name = bump_installer_version()
         else:
-            props = read_installer_version_properties()
-            version_code = props.get("versionCode", "1")
-            version_name = props.get("versionName", "1.0.0")
+            version_code = str(version_code or "").strip()
+            version_name = str(version_name or "").strip()
+            if not version_name or not version_code.isdigit():
+                BUILD_STATE["message"] = "Installer version name and numeric version code are required when auto bump is off."
+                return
         write_installer_version_properties(version_code, version_name)
         env, sdk_err = resolve_android_sdk_env(os.environ.copy())
         if sdk_err:
@@ -377,13 +421,18 @@ def _run_installer_build_thread(*, auto_bump=True, release_notes=""):
         BUILD_STATE["phase"] = "idle" if BUILD_STATE["last_ok"] else "failed"
 
 
-def start_installer_build(*, auto_bump=True, release_notes=""):
+def start_installer_build(*, auto_bump=True, release_notes="", version_code="", version_name=""):
     with BUILD_LOCK:
         if BUILD_STATE["running"]:
             return False, "A build is already running"
         thread = threading.Thread(
             target=_run_installer_build_thread,
-            kwargs={"auto_bump": auto_bump, "release_notes": release_notes},
+            kwargs={
+                "auto_bump": auto_bump,
+                "release_notes": release_notes,
+                "version_code": version_code,
+                "version_name": version_name,
+            },
             daemon=True,
         )
         thread.start()
@@ -522,8 +571,13 @@ def start_build_and_push(
     package_name="com.orphen.devicesafety",
     app_label="Orphen Device Safety",
 ):
-    if auto_bump or not version_code or not version_name:
+    if auto_bump:
         version_code, version_name = bump_version()
+    else:
+        version_code = str(version_code or "").strip()
+        version_name = str(version_name or "").strip()
+        if not version_name or not version_code.isdigit():
+            return False, "Version name and numeric version code are required when auto bump is off.", version_code, version_name
     with BUILD_LOCK:
         if BUILD_STATE["running"]:
             return False, "A build is already running", version_code, version_name

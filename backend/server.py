@@ -4107,9 +4107,13 @@ class ApiHandler(BaseHTTPRequestHandler):
         body = self.read_form_body()
         auto_bump = str(body.get("autoBump", ["on"])[0]).strip().lower() in ("on", "1", "true", "yes")
         release_notes = str(body.get("releaseNotes", [""])[0]).strip()
+        version_name = str(body.get("versionName", [""])[0]).strip()
+        version_code = str(body.get("versionCode", [""])[0]).strip()
         ok, message = app_release.start_installer_build(
             auto_bump=auto_bump,
             release_notes=release_notes or "Orphen APK Installer — built from server UI",
+            version_code=version_code,
+            version_name=version_name,
         )
         self.send_html(render_app_release_center(message, building=ok, detail=message if ok else ""))
 
@@ -5641,14 +5645,17 @@ def render_app_release_center(message="", building=False, detail=""):
         f"{sdk_alert}"
         f'<p class="mb-2"><strong>Status:</strong> <span id="build-status-line">{status_line}</span></p>'
         '<form method="post" action="/app-release-center/build-push">'
-        '<input type="hidden" name="autoBump" value="on">'
         '<input type="hidden" name="packageName" value="com.orphen.devicesafety">'
         '<input type="hidden" name="appLabel" value="Orphen Device Safety">'
+        '<div class="form-check form-switch mb-2">'
+        '<input class="form-check-input" type="checkbox" role="switch" id="auto-bump-main" name="autoBump" checked>'
+        '<label class="form-check-label" for="auto-bump-main">Auto-calculate next version from DB + APK history</label>'
+        '</div>'
         '<div class="row g-2 mb-2">'
         '<div class="col-md-3"><label class="form-label">Next version name</label>'
-        f'<input class="form-control" name="versionName" value="{next_name}" readonly></div>'
+        f'<input class="form-control" name="versionName" value="{next_name}"></div>'
         '<div class="col-md-3"><label class="form-label">Next version code</label>'
-        f'<input class="form-control" name="versionCode" value="{next_code}" readonly></div>'
+        f'<input class="form-control" name="versionCode" value="{next_code}"></div>'
         '<div class="col-md-6"><label class="form-label">Release notes</label>'
         '<input class="form-control" name="releaseNotes" placeholder="Optional changelog for devices"></div>'
         "</div>"
@@ -5666,12 +5673,15 @@ def render_app_release_center(message="", building=False, detail=""):
         f'<p class="mb-2"><strong>Download URL:</strong> <a href="{installer_apk_url}">{installer_apk_url}</a></p>'
         f'<p class="mb-2"><strong>Build status:</strong> <span id="installer-build-status-line">{status_line}</span></p>'
         '<form method="post" action="/app-release-center/build-installer" class="mb-2">'
-        '<input type="hidden" name="autoBump" value="on">'
+        '<div class="form-check form-switch mb-2">'
+        '<input class="form-check-input" type="checkbox" role="switch" id="auto-bump-installer" name="autoBump" checked>'
+        '<label class="form-check-label" for="auto-bump-installer">Auto-calculate next installer version from release history</label>'
+        '</div>'
         '<div class="row g-2 mb-2">'
         '<div class="col-md-3"><label class="form-label">Next version name</label>'
-        f'<input class="form-control" value="{installer_next_name}" readonly></div>'
+        f'<input class="form-control" name="versionName" value="{installer_next_name}"></div>'
         '<div class="col-md-3"><label class="form-label">Next version code</label>'
-        f'<input class="form-control" value="{installer_next_code}" readonly></div>'
+        f'<input class="form-control" name="versionCode" value="{installer_next_code}"></div>'
         '<div class="col-md-6"><label class="form-label">Release notes (optional)</label>'
         '<input class="form-control" name="releaseNotes" placeholder="Installer changelog"></div>'
         "</div>"

