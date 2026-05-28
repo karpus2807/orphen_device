@@ -329,9 +329,7 @@ def _run_installer_build_thread(*, version_code="", version_name="", release_not
     BUILD_LOG.parent.mkdir(parents=True, exist_ok=True)
     APK_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        if version_code and version_name:
-            pass
-        else:
+        if not version_code or not version_name:
             version_code, version_name = bump_installer_version()
         write_installer_version_properties(version_code, version_name)
         env, sdk_err = resolve_android_sdk_env(os.environ.copy())

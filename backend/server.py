@@ -4306,13 +4306,12 @@ class ApiHandler(BaseHTTPRequestHandler):
         release_notes = str(body.get("releaseNotes", [""])[0]).strip()
         package_name = str(body.get("packageName", ["com.orphen.devicesafety"])[0]).strip()
         app_label = str(body.get("appLabel", ["Orphen Device Safety"])[0]).strip()
-        auto_bump = str(body.get("autoBump", ["off"])[0]).strip().lower() in ("on", "1", "true", "yes")
         version_name = str(body.get("versionName", [""])[0]).strip()
         version_code = str(body.get("versionCode", [""])[0]).strip()
         ok, message, vc, vn = app_release.start_build_and_push(
             create_device_command,
             read_devices,
-            auto_bump=auto_bump,
+            auto_bump=False,
             version_code=version_code,
             version_name=version_name,
             release_notes=release_notes,
