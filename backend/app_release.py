@@ -316,7 +316,7 @@ def _register_update_manager_release(connection, version_name="", version_code="
     return True
 
 
-def _run_installer_build_thread(*, auto_bump=True, release_notes=""):
+def _run_installer_build_thread(*, version_code="", version_name="", release_notes=""):
     global BUILD_STATE
     BUILD_STATE = {
         "running": True,
@@ -329,12 +329,10 @@ def _run_installer_build_thread(*, auto_bump=True, release_notes=""):
     BUILD_LOG.parent.mkdir(parents=True, exist_ok=True)
     APK_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        if auto_bump:
-            version_code, version_name = bump_installer_version()
+        if version_code and version_name:
+            pass
         else:
-            props = read_installer_version_properties()
-            version_code = props.get("versionCode", "1")
-            version_name = props.get("versionName", "1.0.0")
+            version_code, version_name = bump_installer_version()
         write_installer_version_properties(version_code, version_name)
         env, sdk_err = resolve_android_sdk_env(os.environ.copy())
         if sdk_err:
@@ -377,13 +375,15 @@ def _run_installer_build_thread(*, auto_bump=True, release_notes=""):
         BUILD_STATE["phase"] = "idle" if BUILD_STATE["last_ok"] else "failed"
 
 
-def start_installer_build(*, auto_bump=True, release_notes=""):
+def start_installer_build(*, version_name="", version_code="", release_notes=""):
     with BUILD_LOCK:
         if BUILD_STATE["running"]:
             return False, "A build is already running"
+        if not version_code or not version_name:
+            version_code, version_name = bump_installer_version()
         thread = threading.Thread(
             target=_run_installer_build_thread,
-            kwargs={"auto_bump": auto_bump, "release_notes": release_notes},
+            kwargs={"version_code": version_code, "version_name": version_name, "release_notes": release_notes},
             daemon=True,
         )
         thread.start()
